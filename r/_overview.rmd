@@ -1,0 +1,538 @@
+---
+title: "TaxData Enhancement Project"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    toc: true
+    toc_depth: 5
+    df_print: paged
+---
+
+# Project Statement of Work
+
+> Augment Boyd’s current project in which he is developing methods for creating a single state microdata tax file, in two ways: (a) rigorously compare file quality under several different approaches under investigation, and (b) port the approach that produces the best results from R to Python so that it can readily be integrated with TaxData.
+
+
+<!-- First set things up, then run things -->
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change these as needed
+pufdir <- "C:/Users/donbo/Dropbox/OSPC - Shared/IRS_pubuse_2011/"
+
+# Note that my .Rprofile file runs these commands:
+# RPROJ <- list(PROJHOME = normalizePath(getwd()))
+# attach(RPROJ)
+# rm(RPROJ)
+
+# It does this because rmd files change the home directory.
+# This creates a PROJHOME variable that points to the project main directory that can be used when saving and reading files.
+# See how it is used in file reads below.
+
+
+```
+
+
+```{r libraries, message=FALSE, warning=FALSE, include=FALSE}
+library("magrittr")
+library("plyr") # needed for ldply; must be loaded BEFORE dplyr
+library("tidyverse")
+options(tibble.print_max = 60, tibble.print_min = 60) # if more than 60 rows, print 60 - enough for states
+# ggplot2 tibble tidyr readr purrr dplyr stringr forcats
+
+library("scales")
+library("hms") # hms, for times
+library("lubridate") # lubridate, for date/times
+library("vctrs")
+
+library("grDevices")
+library("knitr")
+library("kableExtra")
+
+# library("zoo") # for rollapply
+
+# library("forecast")
+
+library("ipoptr")
+
+```
+
+
+
+```{r general_functions, message=FALSE, warning=FALSE, include=FALSE}
+ns <- function(df) {names(df) %>% sort} # name sort
+
+ht <- function(df, nrecs=6){
+  print(utils::head(df, nrecs))
+  print(utils::tail(df, nrecs))
+}
+
+```
+
+
+# Test `ipoptr` and gain some skill with it
+
+## Make sure that `ipoptr` works by solving the included test problem
+Solve the Rosenbrock Banana test problem, a nonlinear function of 2 variables.
+
+Don't worry now about reading the output. If you see "EXIT: Optimal Solution Found." then everything worked fine.
+
+```{r message=FALSE, warning=FALSE, include=TRUE}
+## Rosenbrock Banana function
+eval_f <- function(x) {   
+  return( 100 * (x[2] - x[1] * x[1])^2 + (1 - x[1])^2 )
+}
+
+## Gradient of Rosenbrock Banana function
+eval_grad_f <- function(x) { 
+  return( c( -400 * x[1] * (x[2] - x[1] * x[1]) - 2 * (1 - x[1]),
+             200 * (x[2] - x[1] * x[1])) )
+}
+
+# The Hessian for this problem is actually dense, 
+# This is a symmetric matrix, fill the lower left triangle only.
+eval_h_structure <- list( c(1), c(1,2) )
+
+eval_h <- function( x, obj_factor, hessian_lambda ) {
+  return( obj_factor*c( 2 - 400*(x[2] - x[1]^2) + 800*x[1]^2,      # 1,1
+                        -400*x[1],                                 # 2,1
+                        200 ) )                                    # 2,2
+}
+
+# initial values
+x0 <- c( -1.2, 1 )
+
+opts <- list("print_level" = 5,
+             "file_print_level" = 12,
+             "output_file" = "banana.out",
+             "tol"=1.0e-8)
+
+# solve Rosenbrock Banana function with analytic hessian 
+print(ipoptr( x0=x0, 
+               eval_f=eval_f, 
+               eval_grad_f=eval_grad_f, 
+               eval_h=eval_h,
+               eval_h_structure=eval_h_structure,
+               opts=opts) )
+
+
+```
+
+
+## Test an increasingly complicated set of PUF targeting problems
+
+### Create a PUF subset to work with
+ONETIME: First, create a small PUF test data set from the PUF that we will work with. See chunk code for information.
+
+```{r message=FALSE, warning=FALSE, include=FALSE, eval=FALSE}
+# You will have to run this one time on your own machine - set include=TRUE
+# Note that I have the data directory in my .gitignore file so that the data - which are restricted in use - are not uploaded to github
+pufraw <- read_csv(paste0(pufdir, "puf2011.csv"), col_types = cols(.default= col_double()))
+glimpse(pufraw)
+ns(pufraw)
+
+# keep a few variables:
+# RECID unique id
+# E00100 AGI
+# E00200 wages
+# E00300 interest received -- not kept
+# E01700 pension income in AGI
+# E02000 schedule E net income 
+# S006 record weight as an integer - must be divided by 100
+vars <- c("RECID", "E00100", "E00200", "E01700", "E02000", "S006")
+set.seed(1234)
+pufsub <- pufraw %>% 
+  sample_n(5000) %>%
+  select(vars) %>%
+  mutate(weight=S006 / 100, otheragi=E00100 - E00200 - E01700 - E02000) %>%
+  select(-S006) %>%
+  select(RECID, weight, everything())
+
+# glimpse(pufsub)
+# ht(pufsub)
+saveRDS(pufsub, paste0(PROJHOME, "/data/pufsub.rds")) # make sure data folder is in .gitignore
+
+```
+
+
+Get the PUF subset data and show its contents. We kept 5,000 records, selected randomly, with the following information:
+
++ RECID unique id
++ E00100 AGI
++ E00200 wages
++ E01700 pension income in AGI
++ E02000 schedule E net income (Rental real estate, royalties, partnerships, S corporations, trusts, etc.)
++ otheragi calculated as E00100 minus the other items
++ weight (the original S006 record weight, which we divided by 100 so that it is in the correct units)
+
+```{r}
+pufsub <- readRDS(paste0(PROJHOME, "/data/pufsub.rds")) 
+# glimpse(pufsub) - do not show individual records - they are restricted and the html file is uploaded to github
+summary(pufsub)
+```
+
+
+
+### Define an objective function for use with PUF targeting
+We're going to choose new weights for the PUF that will achieve some targets (constraints). In these exaples, we want to choose weights that are close to the original weights on the file, but hit the targets. We'll penalize new weights that are far from the old weights.
+
+We'll compute the ratio of the new weight to the current weight - call it x (a vector of weights, one for each record) and minimize the following objective (penalty) function based upon this ratio:
+
+$$min \sum_{x} w_1x^2 + x^{-2} -2 $$
+
+where w1 is the original weight and x is the ratio of the new weight (call it w2) to the original weight (i.e., $x=w_2 / w_1$).
+
+For any single record, the penalty function is minimized if the ratio, x, is 1. It penalizes proportionate differences from 1 equally. That is, if the weight is reduced to 10% of the original weight (x=.1) the penalty is the same as if the weight is increased to 10 times the original weight (x=10). Far distances from 1 are penalized disproportionately relative to smaller distances.
+
+The minimum possible value for the function, summed over all x's, is zero of course.
+
+The minus 2 is not necessary analytically but it makes the objective function easier to interpret and also reduces risk of numerical instability by keeping the objective function calculation for each weight close to zero.
+
+Other objective functions are possible but we won't worry about that now. (For example, the TaxData documentation says they minimize the sum of the absolute value of the percentage change of the new weight from the original weight. That, of course, is not )
+
+The following graph shows the objective function for x ranging from 0.1 to 10, where w1 is assumed away (weight is 1 for all records). It is minimized at 1, of course, and the values at 0.1 and 10.0 are the same.
+
+```{r}
+# graph of the objective  assuming all weights are 1.
+f1 <- function(x) x^2 + x^-2 - 2
+ 
+tibble(x=seq(0.01, 100, .01)) %>%
+  mutate(y=f1(x)) %>%
+  filter(x > 0.09, x < 10.01) %>%
+  ggplot(aes(x, y)) +
+  geom_line() +
+  geom_vline(xintercept = 1, linetype="dashed") +
+  scale_x_continuous(name="x (ratio of new weight to old weight)", 
+                     breaks=c(.1, .25, .5, .75, 1, 2:20)) +
+  theme(axis.text.x = element_text(angle = -90, vjust=0.5)) +
+  scale_y_continuous(name="y (penalty)") +
+  ggtitle("Objective function y=x^2 + x^-2 - 2, over the interval [0.1, 10]")
+
+
+```
+
+This is not the only possible objective function. Two other candidates are:
+
++ The TaxData objective function: minimize the sum of the absolute value of the percentage change from the original weight to the new weight (or, identically, minimize the sum of the difference between x and 1), or $min \sum_x abs(x - 1)$
++ An alternative that has been put forth $min \sum_x (x - 1)^2$
+
+Note that the function shown in the previous graph is symmetric around 1 in x and its multiplicative inverse, while both of these are additively symmetric around 1.
+
+Note also that the TaxData function is not continuous or differentiable.
+
+```{r}
+
+f2 <- function(x) abs(x - 1) # the TaxData function
+f3 <- function(x) (x - 1)^2 # a continuous differentiable variant of the TaxData function
+
+tibble(x=seq(0.01, 100, .01)) %>%
+  filter(x > 0.09, x < 10.01) %>%
+  mutate(y1=f1(x), y2=f2(x), y3=f3(x),
+         # scale the functions to have the same value at x==10
+         y2=y2 * y1[x==10] / y2[x==10],
+         y3=y3 * y1[x==10] / y3[x==10]) %>%
+  gather(objfn, y, y1, y2, y3) %>%
+  mutate(objfn=factor(objfn, 
+                      labels=c("y1: x^2 + x^-2 - 2",
+                               "y2: abs(x - 1)",
+                               "y3: (x - 1)^2"))) %>%
+  ggplot(aes(x, y, colour=objfn)) +
+  geom_line() +
+  geom_vline(xintercept = 1, linetype="dashed") +
+  scale_x_continuous(name="x (ratio of new weight to old weight)", 
+                     breaks=c(.1, .25, .5, .75, 1, 2:20)) +
+  theme(axis.text.x = element_text(angle = -90, vjust=0.5)) +
+  scale_y_continuous(name="y (penalty)\nscaled so that all have the same penalty at x==10") +
+  ggtitle("Selected objective functions over the interval [0.1, 10]")
+
+
+```
+
+
+Define R functions that will be used within ipoptr (and can be used externally, too) to calculate, for any given x vector:
+
++ The objective function evaluated at point x (a vector). It returns a single value.
++ The gradient of the objective function evaluated at point x. It returns a vector of values, the same length as x, where each element is the partial derivative of the objective function with respect to the corresponding element in x. This is used by IPOPT in choosing a search direction. While some non-linear programming (NLP) methods do not require derivatives, IPOPT does. While it is possible to write a function that calculates approximate derivatives, it is better to specify analytic derivatives when possible.
+
+In addition to passing x to each function we will pass a list, that I call `inputs`, that can have anything we want it to have. The reason for this is that `ipoptr` requires any function it uses to receive the same arguments. Passing the same list to each function allows us to have functions that use different items (all contained within inputs) but receive the same arguments.
+
+We could call these functions anything. I call the objective function `eval_f_xtop` which uses the name `ipoptr` uses for the objective (eval_f) plus a suffix, xtop, which stands for x to the power p (we could use any even power for the objective funciton, not just 2 as in the example above). Similarly, I call the gradient `eval_grad_f_xtop`.
+
+
+```{r functions_obj, echo=TRUE}
+eval_f_xtop <- function(x, inputs) {
+  #.. objective function - evaluates to a single number ----
+  
+  # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
+  # here are the objective function, the 1st deriv, and the 2nd deriv
+  # http://www.derivative-calculator.net/
+  # w{x^p + x^(-p) - 2}                                 objective function
+  # w{px^(p-1) - px^(-p-1)}                             first deriv
+  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  
+  # make it easier to read:
+  p <- inputs$p
+  w <- inputs$weight
+  
+  obj <- sum(w * {x^p + x^(-p) -2})
+  
+  return(obj)
+}
+
+
+eval_grad_f_xtop <- function(x, inputs){
+  #.. gradient of objective function - a vector length x ----
+  # giving the partial derivatives of obj wrt each x[i]
+  
+  # ipoptr requires that ALL functions receive the same arguments, so I pass the inputs list to ALL functions
+  
+  # http://www.derivative-calculator.net/
+  # w{x^p + x^(-p) - 2}                                 objective function
+  # w{px^(p-1) - px^(-p-1)}                             first deriv
+  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  
+  # make it easier to read:
+  p <- inputs$p
+  w <- inputs$weight
+  
+  gradf <- w * (p * x^(p-1) - p * x^(-p-1))
+  
+  return(gradf)
+}
+```
+
+
+### Define constraints and associated functions
+We will define a set of targets for the reweighted PUF, or "constraints" in NLP nomenclature.
+
+Examples of constraints are:
+
++ The sum of weighted adjusted gross income (E00100) or another variable in the file using a given set of weights. For example:
+++ sum(E00100 * weight) gives the sum with current weights, and
+++ sum(E00100 * weight * x) gives the sum with new weights, if x is the ratio of new weights to original weights
++ The number of weighted tax returns in the file
++ The sum of weighted negative values for a variable. For example, E02000 (rental income etc.) can be negative (a loss). We might want to target the sum of these negative values separately from the sum of positive values for the variable.
++ The weighted number of negative values for a variable (e.g., the number of returns, weighted, that have losses).
++ Any of the above, within specific segments of the file, such as the number returns with negative rental income, within the subset of the file that has married couples with income between $50k and $75k. Obviously it only makes sense to construct a target for such a narrow portion of the file if we think we can estimate or forecast what a proper target should be.
+
+The file with existing weights has total AGI of `r comma(sum(pufsub$E00100 * pufsub$weight))` and total wages of `r comma(sum(pufsub$E00200 * pufsub$weight))`. We might (if we had information that suggested this), set a target for AGI that is 10% greater (`r comma(sum(pufsub$E00100 * pufsub$weight)*1.1)`) while at the same time setting a target for wages that is 5% less (`r comma(sum(pufsub$E00200 * pufsub$weight)*.95)`). 
+
+#### Creating a set of constraint coefficients using dense matrices
+We need to tell `ipoptr` (which tells IPOPT) how the targeted values on our reweighted file will change as we change our variable x -- that is we need to define constraint coefficients, the first partial derivative of each constraint with respect to each x varialeree. These areour constraint target will change 
+
+There is more than one way to set up the constraints for the problem. For now, not worrying about computer resources, we'll use dense matrices. Imagine a matrix where every row is a record in our data file, every column represents a possible constraint of interest (e..g, the weighted sum of AGI, or the weighted number of returns with negative rental income), and every cell in the matrix represents how much the constraint (e.g,. the weighted sum of AGI) will change if we change the ratio x applicable to that return.
+
+Suppose that the j-th column of this matrix represents the constraint for the weighted sum of positive AGI; let's name it E00100_sumpos.
+Suppose that the i-th row of this matrix, tax return i, has AGI of $10,000 and an original weight of 17.
+
+
+```{r functions_concoef}
+nnz <- function(vec, weight) {(vec != 0) * 1}
+nz <- function(vec, weight) {(vec == 0) * 1}
+npos <- function(vec, weight) {(vec > 0) * 1}
+nneg <- function(vec, weight) {(vec < 0) * 1}
+
+sum(pufsub$E00100 * pufsub$weight) / 1e9
+
+```
+
+
+
+
+```{r functions_constraints}
+
+nnz <- function(vec, weight) {(vec != 0) * 1}
+nz <- function(vec, weight) {(vec == 0) * 1}
+npos <- function(vec, weight) {(vec > 0) * 1}
+nneg <- function(vec, weight) {(vec < 0) * 1}
+
+sumnz <- function(vec, weight) {(vec != 0) * vec}
+sumpos <- function(vec, weight) {(vec > 0) * vec}
+sumneg <- function(vec, weight) {(vec < 0) * vec}
+
+calc_constraints <- function(weights, data, constraint_vars){
+  # calculated weighted sums of contstaint_vars that are in data, uwing the weight variable
+  # weights: numeric vector
+  # data: df with 1 column per constraint variable (plus possibly additional columns); 1 row per person (tax return)
+  # contraint_vars: character vector
+  # result is a named vector
+  colSums(weights * select(data, constraint_vars))
+}
+
+```
+
+
+
+Create constraint coefficients - how much each targeted sum will change if we change X (the ratio of new weight to original weight by 1)
+
+```{r constraint_coefficients}
+# define POTENTIAl target variables (we may target only a subset of these) and get constraint coefficients
+ptargets <- setdiff(names(pufsub), c("RECID", "weight"))
+
+ccoef <- pufsub %>%
+  mutate_at(vars(ptargets), 
+            list(npos = ~npos(., weight),
+                 sumpos = ~sumpos(., weight)))
+# %>% select(contains("_sum")) # let's just look at values sums for now
+glimpse(ccoef)
+ht(ccoef)
+
+```
+
+
+```{r targets1, message=FALSE, warning=FALSE}
+# define constraint variables and their targets
+# let's just use the sums
+(cvars <- names(ccoef) %>% str_subset(., "_sum"))
+
+# define some targets
+# let's start with something simple, choosing targets for file totals that are pretty close to actual file totals
+sumvals <- calc_constraints(ccoef$weight, ccoef, cvars)
+
+
+# create targets with slightly perturbed values
+targ_factors <- list(E00100_sumpos=1.25,
+                     E00200_sumpos=0.75,
+                     E00300_sumpos=.9,
+                     E01700_sumpos=.8) %>% 
+  unlist # define multipliers for some values, as a named vector
+
+targets <- sumvals[names(targ_factors)] * targ_factors
+
+# sumvals
+# targets
+cbind(sumvals[names(targets)], targets)
+
+```
+
+
+```{r functions_ipopt}
+
+eval_g_dense <- function(x, inputs){
+  #.. constraints that must hold in the solution ----
+  # just give the LHS of the expression
+  # return a vector where each element evaluates a constraint (i.e., sum of (x * a ccmat column), for each column)
+  
+  # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
+  unname(calc_constraints(inputs$weight * x, inputs$data, inputs$constraint_vars))
+}
+
+
+eval_jac_g_dense <- function(x, inputs){
+  # Jacobian of the constraints ----
+  # the Jacobian is the matrix of first partial derivatives of constraints (these derivatives may be constants)
+  # this function evaluates the Jacobian at point x
+  
+  # This is the dense version that returns a vector with one element for EVERY item in the Jacobian (including zeroes)
+  # Thus the vector has n_constraints * n_variables elements
+  # first, all of the elements for constraint 1, then all for constraint 2, etc...
+  
+  # because constraints in this problem are linear, the derivatives are all constants
+  
+  # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
+  
+  return(inputs$cc_dense)
+}
+
+
+define_jac_g_structure_dense <- function(n_constraints, n_variables){
+  #.. function to define the structure of the Jacobian ---
+  # list with n_constraints elements
+  # each is 1:n_variables
+  lapply(1:n_constraints, function(n_constraints, n_variables) 1:n_variables, n_variables)
+} 
+# eval_jac_g_structure_dense <- define_jac_g_structure_dense(n_constraints=2, n_variables=4)
+
+  # eval_jac_g_structure_dense <- define_jac_g_structure_dense(
+  #   n_constraints=ncol(data[, names(constraints)]), 
+  #   n_variables=nrow(data[, names(constraints)]))
+  # 
+
+eval_h_xtop <- function(x, obj_factor, hessian_lambda, inputs){
+  # The Hessian matrix ----
+  # The Hessian matrix has many zero elements and so we set it up as a sparse matrix
+  # We only keep the (potentially) non-zero values that run along the diagonal.
+  
+  # http://www.derivative-calculator.net/
+  # w{x^p + x^(-p) - 2}                                 objective function
+  # w{px^(p-1) - px^(-p-1)}                             first deriv
+  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  
+  # make it easier to read:
+  p <- inputs$p
+  w <- inputs$weight
+  
+  hess <- obj_factor * 
+    { p*w*x^(-p-2) * ((p-1)*x^(2*p)+p+1) }
+  
+  return(hess)
+}
+    
+# 
+
+```
+
+
+```{r optimize1}
+glimpse(pufsub)
+glimpse(ccoef)
+targets
+
+inputs <- list()
+inputs$p <- 2
+inputs$weights <- pufsub$weight
+inputs$data <- ccoef
+inputs$constraint_vars <- "E00100_sumpos"
+inputs$cc_dense <- c(as.matrix(inputs$data[, inputs$constraint_vars] * inputs$weights)) # flattens the cc matrix
+
+clb <- targets[inputs$constraint_vars]
+cub <- targets[inputs$constraint_vars]
+cbind(initial=sumvals[inputs$constraint_vars], clb, cub)
+
+eval_jac_g_structure_dense <- define_jac_g_structure_dense(n_constraints=length(inputs$constraint_vars), 
+                                                           n_variables=nrow(inputs$data))
+str(eval_jac_g_structure_dense)
+
+eval_h_structure <- lapply(1:length(inputs$weight), function(x) x) # diagonal elements of our Hessian
+
+opts <- list("print_level" = 0,
+             "file_print_level" = 5, # integer
+             "linear_solver" = "ma27", # mumps pardiso ma27 ma57 ma77 ma86 ma97
+             "max_iter"=200,
+             "output_file" = "test.out")
+  
+result <- ipoptr(x0 = rep(1, length(inputs$weights)),
+                 lb = rep(-1e19, length(inputs$weights)),
+                 ub = rep(10, length(inputs$weights)),
+                 eval_f = eval_f_xtop, # arguments: x, inputs
+                 eval_grad_f = eval_grad_f_xtop,
+                 eval_g = eval_g_dense, # constraints LHS - a vector of values
+                 eval_jac_g = eval_jac_g_dense,
+                 eval_jac_g_structure = eval_jac_g_structure_dense,
+                 eval_h = eval_h_xtop, # the hessian is essential for this problem
+                 eval_h_structure = eval_h_structure,
+                 constraint_lb = clb,
+                 constraint_ub = cub,
+                 opts = opts,
+                 inputs = inputs)
+
+names(result)
+result$status; result$message
+quantile(result$solution)
+
+calc_constraints(inputs$weights * result$solution, inputs$data, inputs$constraint_vars)
+sumvals; targets
+
+```
+
+
+  
+
+
+
+
