@@ -849,7 +849,7 @@ cbind(filesums, targets, clb, calcsums, cub) %>%
 ## Use scaling options
 Set objective function scaling (read about this in IPOPT options), as our objective function can be very large. Add the options to the list called opts.
 
-Notice that this takes fewer iterations.
+Notice that this takes fewer iterations and less time.
 
 ```{r optimize4_wages_scaled, echo=TRUE}
 
