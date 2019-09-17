@@ -269,7 +269,8 @@ We could call these functions anything. I call the objective function `eval_f_xt
 eval_f_xtop <- function(x, inputs) {
   #.. objective function - evaluates to a single number ----
   
-  # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
   # here are the objective function, the 1st deriv, and the 2nd deriv
   # http://www.derivative-calculator.net/
   # w{x^p + x^(-p) - 2}                                 objective function
@@ -290,8 +291,9 @@ eval_grad_f_xtop <- function(x, inputs){
   #.. gradient of objective function - a vector length x ----
   # giving the partial derivatives of obj wrt each x[i]
   
-  # ipoptr requires that ALL functions receive the same arguments, so I pass the inputs list to ALL functions
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
   
+  # here are the objective function, the 1st deriv, and the 2nd deriv
   # http://www.derivative-calculator.net/
   # w{x^p + x^(-p) - 2}                                 objective function
   # w{px^(p-1) - px^(-p-1)}                             first deriv
@@ -360,7 +362,7 @@ nz <- function(var, weight) {(var == 0) * weight} #  weighted number of returns 
 npos <- function(var, weight) {(var > 0) * weight} # weighted number of returns with positive values
 nneg <- function(var, weight) {(var < 0) * weight} # weighted number of returns with negative values
 
-sumnz <- function(var, weight) {(var != 0) * weight * var} # weighted sum of nonzero value
+sumval <- function(var, weight) {weight * var} # weighted sum of nonzero value
 sumpos <- function(var, weight) {(var > 0) * weight * var}
 sumneg <- function(var, weight) {(var < 0) * weight * var}
 
@@ -379,24 +381,24 @@ ccvars <- c("E00100", "E00200", "E02000")
 ccoef_all <- pufsub %>%
   mutate_at(vars(ccvars), 
             list(npos = ~npos(., weight),
-                 sumpos = ~sumpos(., weight),
-                 nneg = ~nneg(., weight))) %>%
-  select(contains("_"))
+                 sumval = ~sumval(., weight),
+                 nneg = ~nneg(., weight)))
 # glimpse(ccoef_all)
 ht(ccoef_all)
 
 ```
 
 
-### Define generic function to calculate constraint sums based on a given data file and set of weights
+### Define generic function to calculate constraint sums based on a given data file and an x vector
 ```{r}
-calc_constraints <- function(weights, ccoef, constraint_vars){
-  # calculated weighted sums of contstaint_vars that are in data, uwing the weight variable
+calc_constraints <- function(ccoef, constraint_vars, x=rep(1, nrow(ccoef))){
+  # calculated weighted sums of constraint_vars that are in data, using an optional multiplier x
   # weights: numeric vector
-  # ccoef: df with 1 column per constraint variable (plus possibly additional columns); 1 row per person (tax return), values are constraint coefficients
+  # uwccoef: df with 1 column per constraint variable (plus possibly additional columns); 1 row per person (tax return), 
+  #        values are constraint unweighted coefficients
   # contraint_vars: character vector
   # return: a named vector
-  colSums(weights * select(ccoef, constraint_vars))
+  colSums(x * select(ccoef, constraint_vars))
 }
 
 ```
@@ -405,12 +407,16 @@ calc_constraints <- function(weights, ccoef, constraint_vars){
 Check: Print sums on file as it exists, and sums with alternative weights
 ```{r}
 # calculate values on the file and for some randomly chosen targets
-filesums <- calc_constraints(pufsub$weight, ccoef_all, names(ccoef_all)) # a named vector
+vars <- str_subset(names(ccoef_all), "_")
+filesums <- calc_constraints(ccoef_all, vars) # a named vector
+# check:
+# sum(pufsub$weight * pufsub$E00100)
+# sum(ccoef_all$E00100_sumval)
 
 # pick some random x's
 set.seed(5)
 x <- rnorm(nrow(pufsub), mean=1, sd=.2)
-targets <- calc_constraints(pufsub$weight * x, ccoef_all, names(ccoef_all))
+targets <- calc_constraints(ccoef_all, vars, x)
 
 cbind(filesums, targets, gapratio=targets/filesums)
 ```
@@ -430,10 +436,11 @@ We also need to tell `ipoptr` the structure of the Jacobian - which values mean 
 eval_g_dense <- function(x, inputs){
   #.. constraints that must hold in the solution ----
   # just give the LHS of the expression
-  # return a vector where each element evaluates a constraint (i.e., sum of (x * a ccmat column), for each column)
+  # return a vector where each element evaluates a constraint (i.e., sum of (x * a cc matrix column), for each column)
   
-  # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
-  unname(calc_constraints(inputs$weight * x, inputs$data, inputs$constraint_vars)) # ipoptr doesn't seem to like a named vector
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
+  unname(calc_constraints(inputs$ccoef, inputs$constraint_vars, x)) # ipoptr doesn't seem to like a named vector
 }
 
 
@@ -514,8 +521,8 @@ Remind ourselves of the constraint coefficients available: `r names(ccoef_all) %
 Let's target:
 
 + The number of returns -- E00100_npos will do that
-+ Sum of AGI -- E00100_sumpos
-+ Sum of wages -- E00200_sumpos
++ Sum of AGI -- E00100_sumval
++ Sum of wages -- E00200_sumval
 + number of returns that have negative rental income -- E02000_nneg
 
 
@@ -525,25 +532,26 @@ Let's target:
 # define constraint variables and their targets
 # let's just use the sums
 
-constraint_vars <- c("E00100_npos", "E00100_sumpos", "E00200_sumpos", "E02000_nneg")
+constraint_vars <- c("E00100_npos", "E00100_sumval", "E00200_sumval", "E02000_nneg")
 
 ccoef <- ccoef_all %>%
   select(constraint_vars)
   
 # Get the file sums so we know where we are starting from
-(filesums <- calc_constraints(pufsub$weight, ccoef, constraint_vars))
+(filesums <- calc_constraints(ccoef, constraint_vars))
+# (filesums <- calc_constraints(ccoef, constraint_vars, x=1))
 
 # create targets with perturbed values
 targ_factors <- list(E00100_npos=1.25,
-                     E00100_sumpos=0.75,
-                     E00200_sumpos=.9,
+                     E00100_sumval=0.75,
+                     E00200_sumval=.9,
                      E02000_nneg=.8) %>% 
   unlist # define multipliers for some values, as a named vector
 
 targets <- filesums[names(targ_factors)] * targ_factors
 
 # Look at our targets
-cbind(init_vals=filesums[names(targets)], targets)
+cbind(init_vals=filesums[names(targets)], targets, ratio=targets/filesums[names(targets)])
 
 ```
 
@@ -552,14 +560,13 @@ cbind(init_vals=filesums[names(targets)], targets)
 ```{r optimize1_nobounds, echo=TRUE}
 # glimpse(pufsub)
 # glimpse(ccoef)
-targets
-
+# targets
 inputs <- list()
 inputs$p <- 2
 inputs$weights <- pufsub$weight
-inputs$data <- ccoef
+inputs$ccoef <- ccoef
 inputs$constraint_vars <- constraint_vars
-inputs$cc_dense <- c(as.matrix(inputs$data[, inputs$constraint_vars] * inputs$weights)) # flattens the cc matrix
+inputs$cc_dense <- c(as.matrix(inputs$ccoef[, inputs$constraint_vars])) # flattens the cc matrix
 
 # create vectors with constrain lower bounds and upper bounds
 clb <- targets[inputs$constraint_vars]
@@ -568,7 +575,7 @@ cub <- targets[inputs$constraint_vars]
 cbind(init_vals=filesums[names(targets)], targets, clb, cub)
 
 eval_jac_g_structure_dense <- define_jac_g_structure_dense(n_constraints=length(inputs$constraint_vars), 
-                                                           n_variables=nrow(inputs$data))
+                                                           n_variables=nrow(inputs$ccoef))
 # str(eval_jac_g_structure_dense)
 
 eval_h_structure <- lapply(1:length(inputs$weight), function(x) x) # diagonal elements of our Hessian
@@ -597,8 +604,8 @@ result1$status; result1$message; result1$iterations
 result1$objective
 quantile(result1$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
 
-calcsums <- calc_constraints(inputs$weights * result1$solution, inputs$data, inputs$constraint_vars)
-cbind(filesums, targets, calcsums)
+calcsums <- calc_constraints(inputs$ccoef, inputs$constraint_vars, x=result1$solution)
+cbind(filesums, targets, clb, calcsums, cub)
 
 ```
 
@@ -612,9 +619,9 @@ targets
 inputs <- list()
 inputs$p <- 2
 inputs$weights <- pufsub$weight
-inputs$data <- ccoef
+inputs$ccoef <- ccoef
 inputs$constraint_vars <- constraint_vars
-inputs$cc_dense <- c(as.matrix(inputs$data[, inputs$constraint_vars] * inputs$weights)) # flattens the cc matrix
+inputs$cc_dense <- c(as.matrix(inputs$ccoef[, inputs$constraint_vars])) # flattens the cc matrix
 
 # create vectors with constrain lower bounds and upper bounds
 clb <- targets[inputs$constraint_vars]
@@ -623,7 +630,7 @@ cub <- targets[inputs$constraint_vars]
 cbind(init_vals=filesums[names(targets)], targets, clb, cub)
 
 eval_jac_g_structure_dense <- define_jac_g_structure_dense(n_constraints=length(inputs$constraint_vars), 
-                                                           n_variables=nrow(inputs$data))
+                                                           n_variables=nrow(inputs$ccoef))
 # str(eval_jac_g_structure_dense)
 
 eval_h_structure <- lapply(1:length(inputs$weight), function(x) x) # diagonal elements of our Hessian
@@ -655,12 +662,14 @@ result1b <- ipoptr(x0 = rep(1, length(inputs$weights)),
                  inputs = inputs)
 
 # names(result1b) %>% sort
-result1b$status; result1b$message; result1b$iterations
+paste0("Status: ", result1b$status)
+result1b$message
+paste0("Iterations: ", result1b$iterations)
 result1b$objective; result1$objective
 quantile(result1b$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
 
-calcsums <- calc_constraints(inputs$weights * result1b$solution, inputs$data, inputs$constraint_vars)
-cbind(filesums, targets, calcsums)
+calcsums <- calc_constraints(inputs$ccoef, inputs$constraint_vars, x=result1b$solution)
+cbind(filesums, targets, clb, calcsums, cub)
 
 ```
 
@@ -669,10 +678,112 @@ cbind(filesums, targets, calcsums)
 
 Among other things:
 
-+ Creating more complex constraints -- e.g., for subsets of the file
 + How to set the problem up with sparse matrices (if we need to solve HUGE problems)
 + Scaling difficult problems
 + Running massive problems in parallel (may never need this)
 + How to read IPOPT output
 + Troubleshooting problems that are hard to solve
+
+## Add targets for a portion of the distribution of wages
+This is not necessarily the most efficient way to do this, but it should be pretty clear.
+```{r optimize2_wages, echo=TRUE}
+
+# add constraint coefficients for wages
+glimpse(ccoef_all)
+wagevals <- ccoef_all %>%
+  select(RECID, weight, E00200) %>%
+  mutate(wagegroup=cut(E00200, c(-Inf, 0, 10e3, 50e3, 100e3, Inf), labels=FALSE),
+         wagegroup=paste0("wage", wagegroup),
+         wtdwage=E00200 * weight) %>%
+  spread(wagegroup, wtdwage) %>%
+  mutate_at(vars(starts_with("wage")), list(~ifelse(is.na(.), 0, .))) %>%
+  select(RECID, starts_with("wage"))
+ht(wagevals)
+# count(wagevals, wagegroup)
+
+constraint_vars <- c("E00100_npos", "E00100_sumval", "E00200_sumval", "E02000_nneg", "wage1", "wage2", "wage3")
+
+ccoef <- ccoef_all %>%
+  left_join(wagevals) %>%
+  select(constraint_vars)
+  
+# Get the file sums so we know where we are starting from
+(filesums <- calc_constraints(ccoef, constraint_vars))
+# (filesums <- calc_constraints(ccoef, constraint_vars, x=1))
+
+# create targets with perturbed values
+targ_factors <- list(E00100_npos=1.25,
+                     E00100_sumval=0.75,
+                     E00200_sumval=.9,
+                     E02000_nneg=.8,
+                     wage1=1,
+                     wage2=.85,
+                     wage3=.95) %>% 
+  unlist # define multipliers for some values, as a named vector
+
+targets <- filesums[names(targ_factors)] * targ_factors
+
+# Look at our targets
+cbind(init_vals=filesums[names(targets)], targets, ratio=targets/filesums[names(targets)])
+
+targets
+
+inputs <- list()
+inputs$p <- 2
+inputs$weights <- pufsub$weight
+inputs$ccoef <- ccoef
+inputs$constraint_vars <- constraint_vars
+inputs$cc_dense <- c(as.matrix(inputs$ccoef[, inputs$constraint_vars])) # flattens the cc matrix
+
+# create vectors with constrain lower bounds and upper bounds
+clb <- targets[inputs$constraint_vars]
+cub <- targets[inputs$constraint_vars]
+
+cbind(init_vals=filesums[names(targets)], targets, clb, cub)
+
+eval_jac_g_structure_dense <- define_jac_g_structure_dense(n_constraints=length(inputs$constraint_vars), 
+                                                           n_variables=nrow(inputs$ccoef))
+# str(eval_jac_g_structure_dense)
+
+eval_h_structure <- lapply(1:length(inputs$weight), function(x) x) # diagonal elements of our Hessian
+
+
+# set arbitrary bounds for x that fall inside the solution above
+xlb <- rep(.3, length(inputs$weights))
+xub <- rep(10, length(inputs$weights))
+
+opts <- list("print_level" = 0,
+             "file_print_level" = 5, # integer
+             "linear_solver" = "ma27", # mumps pardiso ma27 ma57 ma77 ma86 ma97
+             "max_iter"=200,
+             "output_file" = "prob2_wages.out")
+  
+result2 <- ipoptr(x0 = rep(1, length(inputs$weights)),
+                 lb = xlb,
+                 ub = xub,
+                 eval_f = eval_f_xtop, # arguments: x, inputs
+                 eval_grad_f = eval_grad_f_xtop,
+                 eval_g = eval_g_dense, # constraints LHS - a vector of values
+                 eval_jac_g = eval_jac_g_dense,
+                 eval_jac_g_structure = eval_jac_g_structure_dense,
+                 eval_h = eval_h_xtop, # the hessian is essential for this problem
+                 eval_h_structure = eval_h_structure,
+                 constraint_lb = clb,
+                 constraint_ub = cub,
+                 opts = opts,
+                 inputs = inputs)
+
+# names(result1b) %>% sort
+paste0("Status: ", result2$status)
+result2$message
+paste0("Iterations: ", result2$iterations)
+result2$objective
+quantile(result2$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+calcsums <- calc_constraints(inputs$ccoef, inputs$constraint_vars, x=result2$solution)
+cbind(filesums, targets, clb, calcsums, cub)
+
+
+```
+
 
