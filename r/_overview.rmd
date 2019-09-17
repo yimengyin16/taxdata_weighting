@@ -178,6 +178,7 @@ summary(pufsub)
 
 
 ## Define an objective function for use with PUF targeting
+### What does an objective function look like?
 We're going to choose new weights for the PUF that will achieve some targets (constraints). In these exaples, we want to choose weights that are close to the original weights on the file, but hit the targets. We'll penalize new weights that are far from the old weights.
 
 We'll compute the ratio of the new weight to the current weight - call it x (a vector of weights, one for each record) and minimize the following objective (penalty) function based upon this ratio:
@@ -187,6 +188,8 @@ $$min \sum_{x} w_1(x^2 + x^{-2} -2)$$
 where w1 is the original weight and x is the ratio of the new weight (call it w2) to the original weight (i.e., $x=w_2 / w_1$).
 
 For any single record, the penalty function is minimized if the ratio, x, is 1. It penalizes proportionate differences from 1 equally. That is, if the weight is reduced to 10% of the original weight (x=.1) the penalty is the same as if the weight is increased to 10 times the original weight (x=10). Far distances from 1 are penalized disproportionately relative to smaller distances.
+
+Because the penalty is weighted by the current weight, a change to the weight on a record that is very important (has a large weight) will have a greater penalty than a change to the weight on a record that is less important.
 
 The minimum possible value for the function, summed over all x's, is zero of course.
 
@@ -251,6 +254,7 @@ tibble(x=seq(0.01, 100, .01)) %>%
 ```
 
 
+### Implement an objective function and its gradient
 Define R functions that will be used within ipoptr (and can be used externally, too) to calculate, for any given x vector:
 
 + The objective function evaluated at point x (a vector). It returns a single value.
