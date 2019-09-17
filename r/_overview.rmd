@@ -376,7 +376,7 @@ Now we apply these functions to our data to construct constraint coefficients fo
 
 Each column will represent a constraint, and each row will correspond to a row in the data.
 
-```{r}
+```{r echo=TRUE}
 ccvars <- c("E00100", "E00200", "E02000")
 ccoef_all <- pufsub %>%
   mutate_at(vars(ccvars), 
@@ -390,7 +390,7 @@ ht(ccoef_all)
 
 
 ### Define generic function to calculate constraint sums based on a given data file and an x vector
-```{r}
+```{r echo=TRUE}
 calc_constraints <- function(ccoef, constraint_vars, x=rep(1, nrow(ccoef))){
   # calculated weighted sums of constraint_vars that are in data, using an optional multiplier x
   # weights: numeric vector
@@ -431,7 +431,7 @@ cbind(filesums, targets, gapratio=targets/filesums)
 We also need to tell `ipoptr` the structure of the Jacobian - which values mean what. We will need to pass it a list that has one element for each row of the data. Each element of the list is a vector. The vector has one element for each constraint that indicates the column that the constraint is in. (This is different when we use sparse matrices.) The helper function below, `define_jac_g_structure_dense`, creates the list that `ipoptr` wants.
 
 
-```{r functions_ipopt}
+```{r functions_ipopt, echo=TRUE}
 
 eval_g_dense <- function(x, inputs){
   #.. constraints that must hold in the solution ----
@@ -484,7 +484,7 @@ define_jac_g_structure_dense <- function(n_constraints, n_variables){
 `ipoptr` does not strictly require a Hessian matrix of 2nd derivatives but in this problem it seems to work best with one.
 
 The function below computes the Hessian at point x.
-```{r}
+```{r hessian, echo=TRUE}
 eval_h_xtop <- function(x, obj_factor, hessian_lambda, inputs){
   # The Hessian matrix ----
   # The Hessian matrix has many zero elements and so we set it up as a sparse matrix
@@ -502,7 +502,7 @@ eval_h_xtop <- function(x, obj_factor, hessian_lambda, inputs){
   w <- inputs$weight
   
   hess <- obj_factor * 
-    { p*w*x^(-p-2) * ((p-1)*x^(2*p)+p+1) }
+    (  p*w*x^(-p-2) * {(p-1)*x^(2*p) + p + 1}  )
   
   return(hess)
 }
@@ -672,6 +672,7 @@ calcsums <- calc_constraints(inputs$ccoef, inputs$constraint_vars, x=result1b$so
 cbind(filesums, targets, clb, calcsums, cub)
 
 ```
+
 
 ## Add targets for a portion of the distribution of wages
 This is not necessarily the most efficient way to do this, but it should be pretty clear.
