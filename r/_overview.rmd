@@ -313,9 +313,11 @@ Calculate the objective function and its gradient for a few values, as a test:
 x0 <- c(1, .1, 10)
 inputs <- list()
 inputs$p <- 2
-inputs$weight <- c(1, 1, 1)
 
-for(i in 1:length(x0)) print(eval_f_xtop(x0[i], inputs))
+inputs$weight <- 1
+for(i in 1:length(x0)) {print(eval_f_xtop(x0[i], inputs))}
+
+inputs$weight <- c(1, 1, 1)
 eval_f_xtop(x0, inputs)
 eval_grad_f_xtop(x0, inputs)
 
