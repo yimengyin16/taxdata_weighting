@@ -12037,8 +12037,8 @@ Number of inequality constraint evaluations          = 0
 Number of equality constraint Jacobian evaluations   = 0
 Number of inequality constraint Jacobian evaluations = 0
 Number of Lagrangian Hessian evaluations             = 21
-Total CPU secs in IPOPT (w/o function evaluations)   =      0.544
-Total CPU secs in NLP function evaluations           =      0.093
+Total CPU secs in IPOPT (w/o function evaluations)   =      0.737
+Total CPU secs in NLP function evaluations           =      0.001
 
 EXIT: Optimal Solution Found.
 DenseVector "final x unscaled" with 2 elements:

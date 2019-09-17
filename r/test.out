@@ -1,4 +1,4 @@
-This is Ipopt version 3.12, running with linear solver ma27.
+This is Ipopt version 3.12, running with linear solver ma57.
 
 Number of nonzeros in equality constraint Jacobian...:     5000
 Number of nonzeros in inequality constraint Jacobian.:    30000
@@ -92,7 +92,7 @@ Number of Iterations....: 60
 
                                    (scaled)                 (unscaled)
 Objective...............:  3.8598874172796290e+006   3.8598874172796290e+006
-Dual infeasibility......:  4.4494870023348413e-010   4.4494870023348413e-010
+Dual infeasibility......:  4.4508255518317789e-010   4.4508255518317789e-010
 Constraint violation....:  0.0000000000000000e+000   0.0000000000000000e+000
 Complementarity.........:  1.1202089439153693e-009   1.1202089439153693e-009
 Overall NLP error.......:  1.1202089439153693e-009   1.1202089439153693e-009
@@ -105,7 +105,7 @@ Number of inequality constraint evaluations          = 61
 Number of equality constraint Jacobian evaluations   = 61
 Number of inequality constraint Jacobian evaluations = 61
 Number of Lagrangian Hessian evaluations             = 60
-Total CPU secs in IPOPT (w/o function evaluations)   =      0.425
-Total CPU secs in NLP function evaluations           =      0.688
+Total CPU secs in IPOPT (w/o function evaluations)   =      0.444
+Total CPU secs in NLP function evaluations           =      0.731
 
 EXIT: Optimal Solution Found.
