@@ -673,17 +673,6 @@ cbind(filesums, targets, clb, calcsums, cub)
 
 ```
 
-  
-# TODO: more-complex problems and related complexities
-
-Among other things:
-
-+ How to set the problem up with sparse matrices (if we need to solve HUGE problems)
-+ Scaling difficult problems
-+ Running massive problems in parallel (may never need this)
-+ How to read IPOPT output
-+ Troubleshooting problems that are hard to solve
-
 ## Add targets for a portion of the distribution of wages
 This is not necessarily the most efficient way to do this, but it should be pretty clear.
 ```{r optimize2_wages, echo=TRUE}
@@ -735,7 +724,7 @@ inputs$ccoef <- ccoef
 inputs$constraint_vars <- constraint_vars
 inputs$cc_dense <- c(as.matrix(inputs$ccoef[, inputs$constraint_vars])) # flattens the cc matrix
 
-# create vectors with constrain lower bounds and upper bounds
+# create vectors with constraint lower bounds and upper bounds
 clb <- targets[inputs$constraint_vars]
 cub <- targets[inputs$constraint_vars]
 
@@ -785,5 +774,87 @@ cbind(filesums, targets, clb, calcsums, cub)
 
 
 ```
+
+
+## Use inequality constraints
+```{r optimize3_wages, echo=TRUE}
+
+inputs <- list()
+inputs$p <- 2
+inputs$weights <- pufsub$weight
+inputs$ccoef <- ccoef
+inputs$constraint_vars <- constraint_vars
+inputs$cc_dense <- c(as.matrix(inputs$ccoef[, inputs$constraint_vars])) # flattens the cc matrix
+
+# create vectors with constraint lower bounds and upper bounds
+# define tolerance - for simplicity, use the same for all, but that is not necessary
+tol <- .01 # 1% range
+clb <- targets[inputs$constraint_vars]
+clb <- clb - tol * abs(clb)
+
+cub <- targets[inputs$constraint_vars]
+cub <- cub + tol * abs(cub)
+
+# Create a range 
+
+cbind(init_vals=filesums[names(targets)], targets, clb, cub)
+
+eval_jac_g_structure_dense <- define_jac_g_structure_dense(n_constraints=length(inputs$constraint_vars), 
+                                                           n_variables=nrow(inputs$ccoef))
+# str(eval_jac_g_structure_dense)
+
+eval_h_structure <- lapply(1:length(inputs$weight), function(x) x) # diagonal elements of our Hessian
+
+
+# set arbitrary bounds for x that fall inside the solution above
+xlb <- rep(.3, length(inputs$weights))
+xub <- rep(10, length(inputs$weights))
+
+opts <- list("print_level" = 0,
+             "file_print_level" = 5, # integer
+             "linear_solver" = "ma27", # mumps pardiso ma27 ma57 ma77 ma86 ma97
+             "max_iter"=200,
+             "output_file" = "prob2_wages_inequals.out")
+  
+result <- ipoptr(x0 = rep(1, length(inputs$weights)),
+                 lb = xlb,
+                 ub = xub,
+                 eval_f = eval_f_xtop, # arguments: x, inputs
+                 eval_grad_f = eval_grad_f_xtop,
+                 eval_g = eval_g_dense, # constraints LHS - a vector of values
+                 eval_jac_g = eval_jac_g_dense,
+                 eval_jac_g_structure = eval_jac_g_structure_dense,
+                 eval_h = eval_h_xtop, # the hessian is essential for this problem
+                 eval_h_structure = eval_h_structure,
+                 constraint_lb = clb,
+                 constraint_ub = cub,
+                 opts = opts,
+                 inputs = inputs)
+
+# names(result1b) %>% sort
+paste0("Status: ", result$status)
+result$message
+paste0("Iterations: ", result$iterations)
+result$objective
+quantile(result$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+calcsums <- calc_constraints(inputs$ccoef, inputs$constraint_vars, x=result$solution)
+cbind(filesums, targets, clb, calcsums, cub) %>%
+  kable(digits=0, format.args = list(big.mark=","))
+
+
+```
+
+  
+# TODO: more-complex problems and related complexities
+
+Among other things:
+
++ How to set the problem up with sparse matrices (if we need to solve HUGE problems)
++ Scaling difficult problems
++ Running massive problems in parallel (may never need this)
++ How to read IPOPT output
++ Troubleshooting problems that are hard to solve
+
 
 
