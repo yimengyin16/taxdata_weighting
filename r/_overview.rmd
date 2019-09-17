@@ -182,7 +182,7 @@ We're going to choose new weights for the PUF that will achieve some targets (co
 
 We'll compute the ratio of the new weight to the current weight - call it x (a vector of weights, one for each record) and minimize the following objective (penalty) function based upon this ratio:
 
-$$min \sum_{x} w_1x^2 + x^{-2} -2 $$
+$$min \sum_{x} w_1(x^2 + x^{-2} -2)$$
 
 where w1 is the original weight and x is the ratio of the new weight (call it w2) to the original weight (i.e., $x=w_2 / w_1$).
 
