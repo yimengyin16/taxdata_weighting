@@ -182,7 +182,7 @@ We're going to choose new weights for the PUF that will achieve some targets (co
 
 We'll compute the ratio of the new weight to the current weight - call it x (a vector of weights, one for each record) and minimize the following objective (penalty) function based upon this ratio:
 
-$$min \sum_{x} w_1x^2 + x^{-2} -2 $$
+$$min \sum_{x} w_1(x^2 + x^{-2} -2)$$
 
 where w1 is the original weight and x is the ratio of the new weight (call it w2) to the original weight (i.e., $x=w_2 / w_1$).
 
@@ -191,8 +191,6 @@ For any single record, the penalty function is minimized if the ratio, x, is 1. 
 The minimum possible value for the function, summed over all x's, is zero of course.
 
 The minus 2 is not necessary analytically but it makes the objective function easier to interpret and also reduces risk of numerical instability by keeping the objective function calculation for each weight close to zero.
-
-Other objective functions are possible but we won't worry about that now. (For example, the TaxData documentation says they minimize the sum of the absolute value of the percentage change of the new weight from the original weight. That, of course, is not )
 
 The following graph shows the objective function for x ranging from 0.1 to 10, where w1 is assumed away (weight is 1 for all records). It is minimized at 1, of course, and the values at 0.1 and 10.0 are the same.
 
@@ -218,11 +216,11 @@ tibble(x=seq(0.01, 100, .01)) %>%
 This is not the only possible objective function. Two other candidates are:
 
 + The TaxData objective function: minimize the sum of the absolute value of the percentage change from the original weight to the new weight (or, identically, minimize the sum of the difference between x and 1), or $min \sum_x abs(x - 1)$
-+ An alternative that has been put forth $min \sum_x (x - 1)^2$
++ An alternative that has been put forth $min \sum_x w_1(x - 1)^2$
 
 Note that the function shown in the previous graph is symmetric around 1 in x and its multiplicative inverse, while both of these are additively symmetric around 1.
 
-Note also that the TaxData function is not continuous or differentiable.
+Note also that the TaxData function is not continuous or differentiable. Also, it is not weighted by the current weight.
 
 ```{r}
 
