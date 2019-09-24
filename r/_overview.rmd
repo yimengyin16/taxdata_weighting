@@ -314,6 +314,7 @@ eval_grad_f_xtop <- function(x, inputs){
 }
 ```
 
+
 Calculate the objective function and its gradient for a few values, as a test:
 
 ```{r echo=TRUE}
@@ -1064,8 +1065,8 @@ recipe
 ```
 
 
+Now we can create a sparse data frame of constraint coefficients
 
-# now we can create a sparse data frame of constraint coefficients
 ```{r ccoef_sparse_function, echo=TRUE}
 get_ccoefs <- function(recipe, puf){
   # recipe as passed to this function will have only one record - 
@@ -1386,7 +1387,8 @@ Now we can solve the problem. I did a few things to make it easy to solve.
 
 + First, I limited the perturbation to be within +/- 5% of the true values on the file.
 + Second, I established inequality constraints below that are +/- 2% of the targets.
-+ Third, in the options below I switched from the default solver ma27 to a more-appropriate solver, ma57, that requires a license (which I have).
++ Third, I expanded the bounds on the x values to range from 0.2 to 30
++ Fourth, in the options below I switched from the default solver ma27 to a more-appropriate solver, ma57, that requires a license (which I have).
 
 Also, I adjusted the objective function scaling because this is a larger problem, but I doubt that was necessary.
 
