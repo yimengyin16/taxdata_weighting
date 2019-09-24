@@ -3,9 +3,16 @@ List of options:
 
                                     Name   Value                # times used
                         file_print_level = 12                        1
-                             output_file = banana.out                1
+                             output_file = C:\Users\donbo\Dropbox\RPrograms PC\OSPC\taxdata_weighting/results/banana.out      1
                              print_level = 0                         2
                                      tol = 1e-008                    2
+
+******************************************************************************
+This program contains Ipopt, a library for large-scale nonlinear optimization.
+ Ipopt is released as open source code under the Eclipse Public License (EPL).
+         For more information visit http://projects.coin-or.org/Ipopt
+******************************************************************************
+
 This is Ipopt version 3.12, running with linear solver ma27.
 
 Number of nonzeros in equality constraint Jacobian...:        0
@@ -12030,8 +12037,8 @@ Number of inequality constraint evaluations          = 0
 Number of equality constraint Jacobian evaluations   = 0
 Number of inequality constraint Jacobian evaluations = 0
 Number of Lagrangian Hessian evaluations             = 21
-Total CPU secs in IPOPT (w/o function evaluations)   =      0.101
-Total CPU secs in NLP function evaluations           =      0.001
+Total CPU secs in IPOPT (w/o function evaluations)   =      0.690
+Total CPU secs in NLP function evaluations           =      0.839
 
 EXIT: Optimal Solution Found.
 DenseVector "final x unscaled" with 2 elements:

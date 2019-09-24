@@ -8,7 +8,7 @@ Total number of variables............................:     5000
                      variables with only lower bounds:        0
                 variables with lower and upper bounds:     5000
                      variables with only upper bounds:        0
-Total number of equality constraints.................:        1
+Total number of equality constraints.................:        0
 Total number of inequality constraints...............:        6
         inequality constraints with only lower bounds:        0
    inequality constraints with lower and upper bounds:        6
@@ -48,21 +48,21 @@ iter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls
 Number of Iterations....: 26
 
                                    (scaled)                 (unscaled)
-Objective...............:  3.8598874216520005e+002   3.8598874216520004e+006
-Dual infeasibility......:  5.0123635324953533e-009   5.0123635324953536e-005
+Objective...............:  3.8598874216520011e+002   3.8598874216520009e+006
+Dual infeasibility......:  5.0123635256106695e-009   5.0123635256106698e-005
 Constraint violation....:  0.0000000000000000e+000   0.0000000000000000e+000
-Complementarity.........:  1.6638432884245635e-009   1.6638432884245633e-005
-Overall NLP error.......:  5.0123635324953533e-009   5.0123635324953536e-005
+Complementarity.........:  1.6638432884256105e-009   1.6638432884256106e-005
+Overall NLP error.......:  5.0123635256106695e-009   5.0123635256106698e-005
 
 
 Number of objective function evaluations             = 27
 Number of objective gradient evaluations             = 27
-Number of equality constraint evaluations            = 27
+Number of equality constraint evaluations            = 0
 Number of inequality constraint evaluations          = 27
-Number of equality constraint Jacobian evaluations   = 27
+Number of equality constraint Jacobian evaluations   = 0
 Number of inequality constraint Jacobian evaluations = 27
 Number of Lagrangian Hessian evaluations             = 26
-Total CPU secs in IPOPT (w/o function evaluations)   =      0.187
-Total CPU secs in NLP function evaluations           =      0.405
+Total CPU secs in IPOPT (w/o function evaluations)   =      0.195
+Total CPU secs in NLP function evaluations           =      0.691
 
 EXIT: Optimal Solution Found.

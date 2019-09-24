@@ -7,6 +7,7 @@ output:
     df_print: paged
     toc: yes
     toc_depth: 5
+    number_sections: true
 editor_options: 
   chunk_output_type: inline
 ---
@@ -41,7 +42,7 @@ pufdir <- "C:/Users/donbo/Dropbox/OSPC - Shared/IRS_pubuse_2011/"
 ```
 
 
-```{r libraries, message=FALSE, warning=FALSE, include=FALSE}
+```{r libraries, include=FALSE}
 library("magrittr")
 library("plyr") # needed for ldply; must be loaded BEFORE dplyr
 library("tidyverse")
@@ -67,7 +68,7 @@ library("ipoptr")
 
 
 
-```{r general_functions, message=FALSE, warning=FALSE, include=FALSE}
+```{r general_functions, include=FALSE}
 ns <- function(df) {names(df) %>% sort} # name sort
 
 ht <- function(df, nrecs=6){
@@ -112,6 +113,7 @@ opts <- list("print_level" = 5,
              "file_print_level" = 12,
              "output_file" = "banana.out",
              "tol"=1.0e-8)
+opts$output_file <- paste0(PROJHOME, "/results/banana.out")
 
 # solve Rosenbrock Banana function with analytic hessian 
 print(ipoptr( x0=x0, 
@@ -129,7 +131,7 @@ print(ipoptr( x0=x0,
 ## Create a PUF subset to work with
 ONETIME: First, create a small PUF test data set from the PUF that we will work with. See chunk code for information.
 
-```{r message=FALSE, warning=FALSE, include=FALSE, eval=FALSE}
+```{r ONETIME_pufsub, eval=FALSE}
 # You will have to run this one time on your own machine - set include=TRUE
 # Note that I have the data directory in my .gitignore file so that the data - which are restricted in use - are not uploaded to github
 pufraw <- read_csv(paste0(pufdir, "puf2011.csv"), col_types = cols(.default= col_double()))
@@ -170,7 +172,7 @@ Get the PUF subset data and show its contents. We kept 5,000 records, selected r
 + otheragi calculated as E00100 minus the other items
 + weight (the original S006 record weight, which we divided by 100 so that it is in the correct units)
 
-```{r}
+```{r getpufsub}
 pufsub <- readRDS(paste0(PROJHOME, "/data/pufsub.rds")) 
 # glimpse(pufsub) - do not show individual records - they are restricted and the html file is uploaded to github
 summary(pufsub)
@@ -198,7 +200,7 @@ The minus 2 is not necessary analytically but it makes the objective function ea
 
 The following graph shows the objective function for x ranging from 0.1 to 10, where w1 is assumed away (weight is 1 for all records). It is minimized at 1, of course, and the values at 0.1 and 10.0 are the same.
 
-```{r}
+```{r plot_obj, echo=TRUE}
 # graph of the objective  assuming all weights are 1.
 f1 <- function(x) x^2 + x^-2 - 2
  
@@ -226,7 +228,7 @@ Note that the function shown in the previous graph is symmetric around 1 in x an
 
 Note also that the TaxData function is not continuous or differentiable. Also, it is not weighted by the current weight.
 
-```{r}
+```{r plot_altobj, echo=TRUE}
 
 f2 <- function(x) abs(x - 1) # the TaxData function
 f3 <- function(x) (x - 1)^2 # a continuous differentiable variant of the TaxData function
@@ -412,7 +414,7 @@ calc_constraints <- function(ccoef, constraint_vars, x=rep(1, nrow(ccoef))){
 
 
 Check: Print sums on file as it exists, and sums with alternative weights
-```{r}
+```{r echo=TRUE}
 # calculate values on the file and for some randomly chosen targets
 vars <- str_subset(names(ccoef_all), "_")
 filesums <- calc_constraints(ccoef_all, vars) # a named vector
@@ -571,13 +573,14 @@ hess_structure(nvariables=5)
 ```
 
 
-# Start with a simple PUF targeting problem
+# Start with a simple PUF targeting problem and examine progressively more complex problems
 Later we will move to more-complex problems.
 
 Here we look at a subset of the constraints we computed above. We compute current file totals and make up some perturbed totals that we will use as targets. Then we solve the problem.
 
 
-## Define the targets
+First we define the targets and then solve the problem.
+
 Remind ourselves of the constraint coefficients available: `r names(ccoef_all) %>% sort`
 Let's target:
 
@@ -587,7 +590,7 @@ Let's target:
 + number of returns that have negative rental income -- E02000_nneg
 
 
-```{r targets1, message=FALSE, warning=FALSE}
+```{r targets1, echo=TRUE}
 # glimpse(ccoef_all)
 # Let's target the number of returns (E00100_npos) will do that
 # define constraint variables and their targets
@@ -617,7 +620,7 @@ cbind(init_vals=filesums[names(targets)], targets, ratio=targets/filesums[names(
 ```
 
 
-## Solve the problem with no bounds on the x values
+## Solve a problem with no bounds on the x values
 ```{r optimize1_nobounds, echo=TRUE}
 # glimpse(pufsub)
 # glimpse(ccoef)
@@ -645,11 +648,13 @@ eval_jac_g_structure_dense <- define_jac_g_structure_dense(n_constraints=length(
 
 eval_h_structure <- hess_structure(length(inputs$weight))
 
+# note that we do not display output to the screen (print_level = 0) but
+# we do write output to a file (output_file = prob1.out)
 opts <- list("print_level" = 0, # use a positive integer to see progress of IPOPT
              "file_print_level" = 5, # integer
              "linear_solver" = "ma27", # mumps pardiso ma27 ma57 ma77 ma86 ma97
-             "max_iter"=200,
-             "output_file" = "prob1.out")
+             "max_iter"=200)
+opts$output_file <- paste0(PROJHOME, "/results/prob1.out")
   
 result <- ipoptr(x0 = x0,
                  eval_f = eval_f_xtop, # arguments: x, inputs
@@ -686,7 +691,7 @@ result1 <- result
 xlb <- rep(.3, length(inputs$weights))
 xub <- rep(10, length(inputs$weights))
 
-opts$output_file <- "prob2.out"
+opts$output_file <- paste0(PROJHOME, "/results/prob2.out")
 opts
   
 result <- ipoptr(x0 = rep(1, length(inputs$weights)),
@@ -801,9 +806,10 @@ xub <- rep(10, length(inputs$weights))
 opts <- list("print_level" = 0,
              "file_print_level" = 5, # integer
              "linear_solver" = "ma27", # mumps pardiso ma27 ma57 ma77 ma86 ma97
-             "max_iter"=200,
-             "output_file" = "prob3.out")
+             "max_iter"=200)
+opts$output_file <- paste0(PROJHOME, "/results/prob3.out")
   
+
 result <- ipoptr(x0 = rep(1, length(inputs$weights)),
                  lb = xlb,
                  ub = xub,
@@ -819,8 +825,6 @@ result <- ipoptr(x0 = rep(1, length(inputs$weights)),
                  opts = opts,
                  inputs = inputs)
 
-# names(result1b) %>% sort
-# names(result) %>% sort
 result$status; result$message; result$iterations
 result$objective
 quantile(result$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
@@ -850,7 +854,7 @@ clb <- clb - tol * abs(clb)
 cub <- targets[inputs$constraint_vars]
 cub <- cub + tol * abs(cub)
 
-opts$output_file <- "prob4.out"
+opts$output_file <- paste0(PROJHOME, "/results/prob4.out")
 opts
   
 result <- ipoptr(x0 = rep(1, length(inputs$weights)),
@@ -896,7 +900,7 @@ Notice that this takes fewer iterations and less time.
 
 ```{r optimize5_wages_scaled, echo=TRUE}
 
-opts$output_file <- "prob5.out"
+opts$output_file <- paste0(PROJHOME, "/results/prob5.out")
 opts$obj_scaling_factor <- 1e-4 # default 1 
 opts$nlp_scaling_max_gradient <- 100 # default 100 -- not changing this now
 opts
@@ -971,7 +975,7 @@ make.sparse.structure <- function(ccoef) {
 #  - a list with 1 element per constraint
 #  -- each element of the list is a vector with values that are the column indexes of the relevant constraints
 
-opts$output_file <- "prob6.out"
+opts$output_file <- paste0(PROJHOME, "/results/prob6.out")
 inputs$jac_vector <- jac_flatten(inputs$ccoef, nz=TRUE) # now we keep only the nonzero elements of the Jacobian
 eval_jac_g_structure_sparse <- make.sparse.structure(inputs$ccoef) # define the sparsity structure
 
@@ -1009,14 +1013,457 @@ result1$iterations; result2$iterations; result3$iterations; result4$iterations; 
 
 ```
 
+## Set the problem up from the beginning with sparse matrix techniques - useful for HUGE problems
+```{r optimize7_sparse_setup, echo=TRUE}
+# calculate constraint coefficients and constraint values without ever using a dense matrix
 
+# here we work through the data space and keep only the constraint coefficients that are nonzero
+# ccvars <- c("E00100", "E00200", "E02000")
+# ccoef_all <- pufsub %>%
+#   mutate_at(vars(ccvars), 
+#             list(npos = ~npos(., weight),
+#                  sumval = ~sumval(., weight),
+#                  nneg = ~nneg(., weight)))
+# # glimpse(ccoef_all)
+# ht(ccoef_all)
+
+# we want the same constraints as before:
+# E00100_npos
+# E00100_sumval
+# E00200_sumval
+# E02000_nneg
+# wage1, wage2, wage3
+
+# our "cut" statement for wages used cut points as follows:
+#    wagegroup=cut(E00200, c(-Inf, 0, 10e3, 50e3, 100e3, Inf)
+# yielding these endpoints 
+# wage1 (-Inf,0]
+# wage2 (0,1e+04]
+# wage3 (1e+04,5e+04]
+# wage4 (5e+04,1e+05]
+# wage5 (1e+05, Inf]
+
+# create a "recipe" that says which ccoef's we want
+recipe <- read_csv("
+vname, valgroup, fn
+E00100, TRUE, npos
+E00100, TRUE, sumval
+E00200, TRUE, sumval
+E02000, TRUE, nneg
+
+E00200, E00200<=0, sumval
+E00200, E00200>0 & E00200<=10e3, sumval
+E00200, E00200>10e3 & E00200<=50e3, sumval
+")
+recipe <- recipe %>%
+  mutate(constraint_sort=row_number(),
+         constraint_name=paste(vname, str_remove_all(valgroup, " "), fn, sep="_")) %>%
+  select(constraint_sort, everything())
+recipe
+
+```
+
+
+
+# now we can create a sparse data frame of constraint coefficients
+```{r ccoef_sparse_function, echo=TRUE}
+get_ccoefs <- function(recipe, puf){
+  # recipe as passed to this function will have only one record - 
+  #   that is, it has rules for a single constraint
+  recipe <- as_tibble(recipe) # force this - otherwise passed as list
+  pufuse <- puf %>%
+    mutate(row_num=row_number()) %>%
+    filter(eval(parse(text=recipe$valgroup))) %>%
+    mutate(vname=recipe$vname) %>%
+    select(vname, row_num, weight, value=recipe$vname)
+  ccoef <- left_join(recipe, pufuse) %>%
+    mutate(ccoef=case_when(recipe$fn=="sumval" ~ value * weight,
+                           recipe$fn=="npos" ~ (value >0) * weight,
+                           recipe$fn=="nneg" ~ (value < 0) * weight)) %>%
+    # keep only the nonzero coefficients
+    filter(ccoef!=0)
+  return(ccoef)
+}
+
+```
+
+
+
+```{r}
+ccoef_sparse <- recipe %>%
+  rowwise() %>%
+  do(get_ccoefs(., pufsub)) %>%
+    ungroup %>%
+  # ONLY AFTER all filtering is done do we assign constraint numbers, as some
+  # may drop out if they have no nonzero coefficients %>%
+  mutate(constraint_num=group_indices(., constraint_sort)) %>%
+  arrange(constraint_num, row_num) %>%
+  select(constraint_num, everything())
+# did any constraints drop out? yes
+count(ccoef_sparse, constraint_num, constraint_sort, constraint_name)
+
+```
+
+
+
+```{r optimize7_constraint_function, echo=TRUE}
+# now we need a function to calculate the constraints at a given point x
+eval_g_sparse <- function(x, inputs){ 
+  #.. constraints that must hold in the solution ----
+  # just give the LHS of the expression
+  # return a vector where each element evaluates a constraint (i.e., sum of (x * a cc matrix column), for each column)
+  
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
+  # This is the dense version in that it uses a dense set of constraint coefficients, inputs$ccoef (passed to this
+  # function as a data frame but we could easily use a matrix instead). It has:
+  #   one column for every constraint
+  #   one row for every variable
+  # Many of the cells are likely to be zero.
+  
+  constraint_vals <- inputs$ccoef_sparse %>%
+    mutate(x=x[row_num]) %>%
+    group_by(constraint_num) %>%
+    summarise(constraint_val=sum(x * ccoef))
+  
+  return(constraint_vals$constraint_val)
+}
+
+# test the function
+# inputs <- list(); inputs$ccoef_sparse <- ccoef_sparse
+# x <- rep(1, nrow(pufsub))
+# eval_g_sparse(x, inputs)
+# filesums # do we get the same sums as before? yes, but wage0 drops out
+
+```
+
+
+Create functions to define the sparse Jacobian structure. In this case our Jacobian matrix is virtual or imaginary - we never created a dense matrix - but we need to define how each element of the long vector of constraint coefficients corresponds to this imaginary Jacobian matrix. That is, for each element of the vector, we need to know the indexes of the corresponding row (i.e., which x element) and corresponding column (i.e., which constraint) of the Jacobian.
+
+
++`jac_flatten_sparse` creates a long vector of nonzero constraint coefficients from our constraint coefficients data frame `ccoef_sparse`
+
++ `define_jac_g_structure_sparse` returns the sparsity structure. It returns a list with 1 element for each constraint. Each element is a vector of row indexes for the rows (x elements) that enter into the constraint calculation.
+
+
+
+```{r}
+# now we need to flatten the constraint coefficients
+jac_flatten_sparse <- function(ccoef_sparse){
+  ccoef_sparse %>%
+    ungroup %>%
+    arrange(constraint_num, row_num) %>%
+    .[["ccoef"]]
+}
+
+
+define_jac_g_structure_sparse <- function(ccoef_sparse){
+  #.. function to define the structure of the Jacobian ---
+  # list with n_constraints elements
+  # each is a vector indicating row indexes relevant to the constraint
+  f <- function(cnum, ccoef_sparse) {
+    ccoef_sparse %>% 
+      filter(constraint_num==cnum) %>%
+      .[["row_num"]]
+  }
+  jac_g_structure <- llply(unique(ccoef_sparse$constraint_num),
+                           f,
+                           ccoef_sparse=ccoef_sparse)
+  return(jac_g_structure)
+}
+# Examples of how to use define_jac_g_structure_sparse:
+# define_jac_g_structure_sparse(ccoef_sparse)
+
+```
+
+
+```{r optimize7_run, echo=TRUE}
+x0 <- rep(1, nrow(pufsub))
+
+# define targets and clb cub
+# old targets 
+targets
+count(ccoef_sparse, constraint_num, constraint_sort, constraint_name)
+
+# drop the one we don't need and remove names
+targets_sparse <- targets[setdiff(names(targets), "wage1")] %>% unname
+input_check <- list(); input_check$ccoef_sparse <- ccoef_sparse
+init_vals <- eval_g_sparse(x0, input_check)
+
+cbind(targets_sparse, init_vals, ratio=targets_sparse / init_vals)
+
+
+# we have some different items to put into inputs
+inputs <- list()
+inputs$p <- 2
+inputs$weights <- pufsub$weight
+inputs$ccoef_sparse <- ccoef_sparse
+inputs$jac_vector <- jac_flatten_sparse(inputs$ccoef_sparse)
+
+# create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
+# create vectors with constraint lower bounds and upper bounds
+# define tolerance - for simplicity, use the same for all, but that is not necessary
+tol <- .01 # 1% range
+clb <- targets_sparse
+clb <- clb - tol * abs(clb)
+
+cub <- targets_sparse
+cub <- cub + tol * abs(cub)
+
+cbind(init_vals, targets_sparse, clb, cub)
+
+eval_jac_g_structure_sparse <- define_jac_g_structure_sparse(inputs$ccoef_sparse)
+
+eval_h_structure <- hess_structure(length(inputs$weight))
+
+
+# set arbitrary bounds for x that fall inside the solution above
+xlb <- rep(.3, length(inputs$weights))
+xub <- rep(10, length(inputs$weights))
+
+opts <- list("print_level" = 0,
+             "file_print_level" = 5, # integer
+             "linear_solver" = "ma27", # mumps pardiso ma27 ma57 ma77 ma86 ma97
+             "max_iter"=200)
+
+opts$output_file <- paste0(PROJHOME, "/results/prob7.out")
+opts$obj_scaling_factor <- 1e-4 # default 1 
+opts$nlp_scaling_max_gradient <- 100 # default 100 -- not changing this now
+opts  
+
+
+
+result <- ipoptr(x0 = x0,
+                 lb = xlb,
+                 ub = xub,
+                 eval_f = eval_f_xtop, # arguments: x, inputs
+                 eval_grad_f = eval_grad_f_xtop,
+                 eval_g = eval_g_sparse, # constraints LHS - a vector of values
+                 eval_jac_g = eval_jac_g,
+                 eval_jac_g_structure = eval_jac_g_structure_sparse,
+                 eval_h = eval_h_xtop, # the hessian is essential for this problem
+                 eval_h_structure = eval_h_structure,
+                 # the constraint bounds are given here
+                 constraint_lb = clb,
+                 constraint_ub = cub,
+                 opts = opts,
+                 inputs = inputs)
+
+result$status; result$message; result$iterations
+result$objective
+quantile(result$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+calcsums <- eval_g_sparse(x=result$solution, inputs)
+
+cbind(init_vals, targets_sparse, clb, calcsums, cub) %>%
+  kable(digits=0, format.args = list(big.mark=","))
+
+result7 <- result
+
+# compare objective function values
+result1$objective; result2$objective; result3$objective; result4$objective; result5$objective; result6$objective; result7$objective
+
+# compare iterations - scaling was a big improvement
+result1$iterations; result2$iterations; result3$iterations; result4$iterations; result5$iterations; result6$iterations; result7$iterations
+
+```
+
+  
+# Put it all together to solve a realistic problem
+Using the functions we've already created, we'll use the full PUF and set targets by AGI range for several variables.
+
+```{r ONETIME_getdata_full, echo=TRUE, eval=FALSE}
+pufraw <- read_csv(paste0(pufdir, "puf2011.csv"), 
+                   col_types = cols(.default= col_double()))
+# glimpse(pufraw)
+ns(pufraw)
+
+# keep a few variables:
+# RECID unique id
+# E00100 AGI
+# E00200 wages
+# E00300 interest received -- not kept
+# E01700 pension income in AGI
+# E02000 schedule E net income 
+# S006 record weight as an integer - must be divided by 100
+vars <- c("RECID", "E00100", "E00200", "E01700", "E02000", "S006")
+puf_full <- pufraw %>% 
+  select(vars) %>%
+  mutate(weight=S006 / 100, otheragi=E00100 - E00200 - E01700 - E02000) %>%
+  select(-S006) %>%
+  select(RECID, weight, everything())
+
+# glimpse(pufsub)
+# ht(pufsub)
+saveRDS(puf_full, paste0(PROJHOME, "/data/puf_full.rds")) # make sure data folder is in .gitignore
+
+```
+
+
+Define constraint coefficients.
+
+```{r ccoef_full, echo=TRUE}
+puf_full <- readRDS(paste0(PROJHOME, "/data/puf_full.rds"))
+
+# create a recipe that says which ccoef's we want.
+# As before, we want a df with 3 columns:
+#   vname: a character variable name
+#   valgroup: a character variable with a logical expression defining the data subgroup
+#   fn: a charactervariable giving a function name (or calculation label)
+#       right now, the function get_ccoefs has definitions for sumval, npos, and nnegs
+#       so that's what we'll use, but we could expand it of course
+
+# create a sub-recipe for file totals - must make sure valgroup is character
+totals_recipe <- read_csv("
+vname, valgroup, fn
+E00100, TRUE, npos
+E00100, TRUE, sumval
+E00200, TRUE, sumval
+E02000, TRUE, nneg", col_types = cols(.default=col_character()))
+
+# create a sub-recipe for agi ranges
+# Here we'll define agi ranges separately, for convenience
+# there may be more efficient (less labor-intensive) ways to do this...
+
+# 5 agi ranges
+agiranges <- read_csv("agirange
+E00100<=0
+E00100>0 & E00100<=50e3
+E00100>50e3 & E00100<=100e3
+E00100>100e3 & E00100<=500e3
+E00100>500e3")
+agiranges
+
+vnames <- c("E00100", "E00200", "E01700", "E02000") # 4 variables
+fns <- c("sumval", "npos", "nneg") # 3 functions
+
+# We are setting things up to define 5 x 4 x 3 = 60 constraints. Here goes:
+
+range_recipe <- expand_grid(vname=vnames, valgroup=agiranges$agirange, fn=fns)
+range_recipe
+
+# now combine the two sub recipes
+recipe <- bind_rows(totals_recipe, range_recipe) %>%
+  mutate(constraint_sort=row_number(),
+         constraint_name=paste(vname, str_remove_all(valgroup, " "), fn, sep="_")) %>%
+  select(constraint_sort, everything())
+recipe
+
+ccoef_sparse <- recipe %>%
+  rowwise() %>%
+  do(get_ccoefs(., puf_full)) %>%
+    ungroup %>%
+  # ONLY AFTER all filtering is done do we assign constraint numbers, as some
+  # may drop out if they have no nonzero coefficients %>%
+  mutate(constraint_num=group_indices(., constraint_sort)) %>%
+  arrange(constraint_num, row_num) %>%
+  select(constraint_num, everything())
+# did any constraints drop out? yes, quite a few
+count(ccoef_sparse, constraint_num, constraint_sort, constraint_name)
+
+```
+
+Note that we defined 64 constraints but only 49 of them have nonzero constraint coefficients. Some things dropped out. For example, in the sparse version there are no constraints for number of returns with negative wages because there are zero records where wages are negative. Thus, there are no possible adjustments to weights that would get us negative wages.
+
+Now that we have a recipe let's create some targets that are slightly perturbed. In an actual analysis, we would have targets that we constructed from actual data or else from forecasts.
+
+```{r targets_full, echo=TRUE}
+x0 <- rep(1, nrow(puf_full)) # initial x value
+# we need an inputs list
+input_check <- list(); input_check$ccoef_sparse <- ccoef_sparse
+
+init_vals <- eval_g_sparse(x0, input_check)
+set.seed(1234); (perturb <- runif(n=length(init_vals), min=.95, max=1.05))
+targets_sparse <- init_vals * perturb
+
+cbind(targets_sparse, init_vals, ratio=targets_sparse / init_vals)
+
+
+```
+
+
+Now we can solve the problem. I did a few things to make it easy to solve. 
+
++ First, I limited the perturbation to be within +/- 5% of the true values on the file.
++ Second, I established inequality constraints below that are +/- 2% of the targets.
++ Third, in the options below I switched from the default solver ma27 to a more-appropriate solver, ma57, that requires a license (which I have).
+
+Also, I adjusted the objective function scaling because this is a larger problem, but I doubt that was necessary.
+
+On my machine an optimal solution is found in less than a minute. By contrast, I have been told that the TaxData reweighting, with far fewer targets, takes many hours.
+
+```{r optimize_full, echo=TRUE}
+inputs <- list()
+inputs$p <- 2
+inputs$weights <- puf_full$weight
+inputs$ccoef_sparse <- ccoef_sparse
+inputs$jac_vector <- jac_flatten_sparse(inputs$ccoef_sparse)
+
+# create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
+# create vectors with constraint lower bounds and upper bounds
+# define tolerance - for simplicity, use the same for all, but that is not necessary
+tol <- .02 # 1% range
+clb <- targets_sparse
+clb <- clb - tol * abs(clb)
+
+cub <- targets_sparse
+cub <- cub + tol * abs(cub)
+
+cbind(init_vals, targets_sparse, clb, cub)
+
+eval_jac_g_structure_sparse <- define_jac_g_structure_sparse(inputs$ccoef_sparse)
+
+eval_h_structure <- hess_structure(length(inputs$weight))
+
+
+# set arbitrary bounds for x that fall inside the solution above
+xlb <- rep(.2, length(inputs$weights))
+xub <- rep(30, length(inputs$weights))
+
+opts <- list("print_level" = 0,
+             "file_print_level" = 5, # integer
+             "max_iter"=200)
+opts$linear_solver <- "ma57" # mumps pardiso ma27 ma57 ma77 ma86 ma97
+
+opts$output_file <- paste0(PROJHOME, "/results/prob_full.out")
+opts$obj_scaling_factor <- 1e-6 # default 1 
+opts$nlp_scaling_max_gradient <- 100 # default 100 -- not changing this now
+opts  
+
+result <- ipoptr(x0 = x0,
+                 lb = xlb,
+                 ub = xub,
+                 eval_f = eval_f_xtop, # arguments: x, inputs
+                 eval_grad_f = eval_grad_f_xtop,
+                 eval_g = eval_g_sparse, # constraints LHS - a vector of values
+                 eval_jac_g = eval_jac_g,
+                 eval_jac_g_structure = eval_jac_g_structure_sparse,
+                 eval_h = eval_h_xtop, # the hessian is essential for this problem
+                 eval_h_structure = eval_h_structure,
+                 # the constraint bounds are given here
+                 constraint_lb = clb,
+                 constraint_ub = cub,
+                 opts = opts,
+                 inputs = inputs)
+
+result$status; result$message; result$iterations
+result$objective
+quantile(result$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+calcsums <- eval_g_sparse(x=result$solution, inputs)
+
+cbind(init_vals, targets_sparse, clb, calcsums, cub) %>%
+  kable(digits=0, format.args = list(big.mark=","))
+
+```
+
+  
   
 # TODO: more-complex problems and related complexities
 
 Among other things:
 
 + How to read IPOPT output
-+ Creating sparse matrices from the start (if we need to solve HUGE problems)
 + Troubleshooting problems that are hard to solve
 + Running massive problems in parallel (may never need this)
 
