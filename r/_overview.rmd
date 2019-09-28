@@ -1271,16 +1271,22 @@ result1$iterations; result2$iterations; result3$iterations; result4$iterations; 
 
 ## Now try a different objective function - a differentiable approximation to absolute value
 
-TaxData documentation says they minimize the sum of the absolute value of the difference between x and 1 (without taking into account the size of the current weight -  not weighting by that weight). We can create a differentiable approximation of this that can be used within IPOPT. 
+TaxData documentation says they minimize the sum of the absolute value of the difference between x and 1 (without taking into account the size of the current weight -  i.e., not weighting by that weight). We can create a differentiable approximation of this that can be used within IPOPT. 
 
-In general a good differentiable approximation of the absolute value of a variable $z$, $abs(v)$, is $(z^2 + s^2)^{1/2}$ where $s$ is a small positive number (e.g., 0.01). This smooths the function around its minimum. In our case, $z$ is $x - 1$ and so the objective is:
+A good twice-differentiable approximation of the absolute value of a variable $z$, $abs(v)$, is $(z^2 + s^2)^{1/2}$ where $s$ is a small number near zero (e.g., 0.01). This smooths the function around its minimum. In our case, $z$ is $x - 1$ and so the objective is:
 
 $$min \sum_{x} [(x-1)^2 + s^2]^{1/2}$$
 
 The first derivative of this for any $x_i$ is:
 $$\frac{(x_i-1)}{[(x_i-1)^2+s^2]^{1/2}}$$
 
-We implement this in a new objective function and gradient function for ipoptr, below.
+
+The second derivative is:
+
+$$\frac{s^2}{((x_i-1)^2 + s^2)^{3/2}}$$
+
+
+We implement this in a new objective function, gradient function, and hessian function for ipoptr, below.
 
 ```{r functions_absapprox, echo=TRUE}
 eval_f_absapprox <- function(x, inputs) {
@@ -1291,10 +1297,10 @@ eval_f_absapprox <- function(x, inputs) {
   
   # here are the objective function, the 1st deriv, and the 2nd deriv
   # http://www.derivative-calculator.net/
-  # [(x-1)^2 + s^2]^{1/2}
-  # w{x^p + x^(-p) - 2}                                 objective function
-  # w{px^(p-1) - px^(-p-1)}                             first deriv
-  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  
+  # [(x-1)^2 + s^2]^{1/2}                                objective function
+  # (x - 1) / ({(x - 1)^2 + s^2}^(1/2))                  first deriv
+  # s^2 / [(x-1)^2 + s^2]^(3/2)                          second deriv
   
   # make it easier to read:
   s <- inputs$s
@@ -1314,10 +1320,10 @@ eval_grad_f_absapprox <- function(x, inputs){
   
   # here are the objective function, the 1st deriv, and the 2nd deriv
   # http://www.derivative-calculator.net/
-  # [(x-1)^2 + s^2]^{1/2}
-  # w{x^p + x^(-p) - 2}                                 objective function
-  # w{px^(p-1) - px^(-p-1)}                             first deriv
-  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  # 
+  # [(x-1)^2 + s^2]^{1/2}                                objective function
+  # (x - 1) / ({(x - 1)^2 + s^2}^(1/2))                  first deriv
+  # s^2 / [(x-1)^2 + s^2]^(3/2)                          second deriv
   
   # make it easier to read:
   s <- inputs$s
@@ -1325,6 +1331,30 @@ eval_grad_f_absapprox <- function(x, inputs){
   gradf <- (x - 1) / ({(x - 1)^2 + s^2}^(1/2))
   
   return(gradf)
+}
+
+eval_h_absapprox <- function(x, obj_factor, hessian_lambda, inputs){
+  # The Hessian matrix ----
+  # The Hessian matrix has many zero elements and so we set it up as a sparse matrix
+  # We only keep the (potentially) non-zero values that run along the diagonal.
+  # the Hessian is returned as a long vector. 
+  # Separately, we define which elements of this vector correspond to which cells of the Hessian matrix.
+  
+  # obj_factor and hessian_lambda are required arguments of the function. They are created within ipoptr - we do not create them.
+  
+  # http://www.derivative-calculator.net/
+  
+  # [(x-1)^2 + s^2]^{1/2}                                objective function
+  # (x - 1) / ({(x - 1)^2 + s^2}^(1/2))                  first deriv
+  # s^2 / [(x-1)^2 + s^2]^(3/2)                          second deriv
+  
+  # make it easier to read:
+  s <- inputs$s
+  
+  hess <- obj_factor * 
+    ( s^2 / {((x-1)^2 + s^2)^(3/2)} )
+  
+  return(hess)
 }
 
 ```
@@ -1357,7 +1387,7 @@ result <- ipoptr(x0 = x0,
                  eval_g = eval_g_sparse, # constraints LHS - a vector of values
                  eval_jac_g = eval_jac_g,
                  eval_jac_g_structure = eval_jac_g_structure_sparse,
-                 eval_h = eval_h_xtop, # the hessian is essential for this problem
+                 eval_h = eval_h_absapprox, # the hessian is essential for this problem
                  eval_h_structure = eval_h_structure,
                  # the constraint bounds are given here
                  constraint_lb = clb,
@@ -1386,7 +1416,9 @@ result1$iterations; result2$iterations; result3$iterations; result4$iterations; 
 
 # Now compare the distributions of x values for the 2 different objective functions
 
-The distributions don't seem that different, at least by a simple examination of quantiles. It's not clear how to interpret the differences given that the original weight enters into one objective function and not the other.
+The distributions are quite different, at least by a simple examination of quantiles, with the x values generally in a smaller range around 1.
+
+It's not clear how to interpret the differences given that the original weight enters into one objective function and not the other.
 
 ```{r compare_twoobj, echo=TRUE}
 # compare quantiles
