@@ -1361,6 +1361,10 @@ eval_h_absapprox <- function(x, obj_factor, hessian_lambda, inputs){
 
 
 Now we rerun the same optimization with this new objective function and its gradient.
+It can need more iterations, so I increase max_iter. 
+I change the obj_scaling_factor to 10, which improves performance.
+Finally, I experiment with different linear solvers; ma27 (default) works about as well as ma57 and ma86. Mumps and ma97 are a bit slower.
+
 ```{r optimize8_run, echo=TRUE}
 # x0, targets, constraints, and tolerances have not changed absapprox
 # nor have the x bounds, jacobian structure, nor most options for ipoptr
@@ -1372,8 +1376,9 @@ ns(inputs)
 opts$output_file <- paste0(PROJHOME, "/results/prob8.out")
 
 # opts$obj_scaling_factor <- 1e-4 # default 1 
-opts$obj_scaling_factor <- 1 # not sure what a good scaling factor should be, let' reset to the default
+opts$obj_scaling_factor <- 1e1 # not sure what a good scaling factor should be, let' reset to the default
 # opts$nlp_scaling_max_gradient <- 100 # default 100 -- not changing this now
+opts$linear_solver <- "ma27"
 
 opts$max_iter <- 500 # this objective function needs more iterations
 opts  
@@ -1554,11 +1559,11 @@ Also, I adjusted the objective function scaling because this is a larger problem
 On my machine an optimal solution is found in less than a minute. By contrast, I have been told that the TaxData reweighting, with far fewer targets, takes many hours.
 
 ```{r optimize_full, echo=TRUE}
-inputs <- list()
-inputs$p <- 2
-inputs$weights <- puf_full$weight
-inputs$ccoef_sparse <- ccoef_sparse
-inputs$jac_vector <- jac_flatten_sparse(inputs$ccoef_sparse)
+inputs_full <- list()
+inputs_full$p <- 2
+inputs_full$weights <- puf_full$weight
+inputs_full$ccoef_sparse <- ccoef_sparse
+inputs_full$jac_vector <- jac_flatten_sparse(inputs_full$ccoef_sparse)
 
 # create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
 # create vectors with constraint lower bounds and upper bounds
@@ -1572,14 +1577,14 @@ cub <- cub + tol * abs(cub)
 
 cbind(init_vals, targets_sparse, clb, cub)
 
-eval_jac_g_structure_sparse <- define_jac_g_structure_sparse(inputs$ccoef_sparse)
+eval_jac_g_structure_sparse <- define_jac_g_structure_sparse(inputs_full$ccoef_sparse)
 
-eval_h_structure <- hess_structure(length(inputs$weight))
+eval_h_structure <- hess_structure(length(inputs_full$weight))
 
 
 # set arbitrary bounds for x that fall inside the solution above
-xlb <- rep(.2, length(inputs$weights))
-xub <- rep(30, length(inputs$weights))
+xlb <- rep(.2, length(inputs_full$weights))
+xub <- rep(30, length(inputs_full$weights))
 
 opts <- list("print_level" = 0,
              "file_print_level" = 5, # integer
@@ -1605,7 +1610,7 @@ result <- ipoptr(x0 = x0,
                  constraint_lb = clb,
                  constraint_ub = cub,
                  opts = opts,
-                 inputs = inputs)
+                 inputs = inputs_full)
 
 result$status; result$message; result$iterations
 result$objective
