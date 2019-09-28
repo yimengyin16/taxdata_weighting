@@ -184,7 +184,7 @@ summary(pufsub)
 ### What does an objective function look like?
 We're going to choose new weights for the PUF that will achieve some targets (constraints). In these exaples, we want to choose weights that are close to the original weights on the file, but hit the targets. We'll penalize new weights that are far from the old weights.
 
-We'll compute the ratio of the new weight to the current weight - call it x (a vector of weights, one for each record) and minimize the following objective (penalty) function based upon this ratio:
+We'll compute the ratio of the new weight to the current weight - call it x (a vector of weight adjustment multipliers, one for each record) and minimize the following objective (penalty) function based upon this ratio:
 
 $$min \sum_{x} w_1(x^2 + x^{-2} -2)$$
 
@@ -1268,6 +1268,133 @@ result1$objective; result2$objective; result3$objective; result4$objective; resu
 result1$iterations; result2$iterations; result3$iterations; result4$iterations; result5$iterations; result6$iterations; result7$iterations
 
 ```
+
+## Now try a different objective function - a differentiable approximation to absolute value
+
+TaxData documentation says they minimize the sum of the absolute value of the difference between x and 1 (without taking into account the size of the current weight -  not weighting by that weight). We can create a differentiable approximation of this that can be used within IPOPT. 
+
+In general a good differentiable approximation of the absolute value of a variable $z$, $abs(v)$, is $(z^2 + s^2)^{1/2}$ where $s$ is a small positive number (e.g., 0.01). This smooths the function around its minimum. In our case, $z$ is $x - 1$ and so the objective is:
+
+$$min \sum_{x} [(x-1)^2 + s^2]^{1/2}$$
+
+The first derivative of this for any $x_i$ is:
+$$\frac{(x_i-1)}{[(x_i-1)^2+s^2]^{1/2}}$$
+
+We implement this in a new objective function and gradient function for ipoptr, below.
+
+```{r functions_absapprox, echo=TRUE}
+eval_f_absapprox <- function(x, inputs) {
+  #.. objective function - evaluates to a single number ----
+  # returns a single value
+  
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
+  # here are the objective function, the 1st deriv, and the 2nd deriv
+  # http://www.derivative-calculator.net/
+  # [(x-1)^2 + s^2]^{1/2}
+  # w{x^p + x^(-p) - 2}                                 objective function
+  # w{px^(p-1) - px^(-p-1)}                             first deriv
+  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  
+  # make it easier to read:
+  s <- inputs$s
+  
+  obj <- sum({(x-1)^2 + s^2}^(1/2))
+  
+  return(obj)
+}
+
+
+eval_grad_f_absapprox <- function(x, inputs){
+  #.. gradient of objective function - a vector length x ----
+  # giving the partial derivatives of obj wrt each x[i]
+  # returns one value per element of x
+  
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
+  # here are the objective function, the 1st deriv, and the 2nd deriv
+  # http://www.derivative-calculator.net/
+  # [(x-1)^2 + s^2]^{1/2}
+  # w{x^p + x^(-p) - 2}                                 objective function
+  # w{px^(p-1) - px^(-p-1)}                             first deriv
+  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  
+  # make it easier to read:
+  s <- inputs$s
+  
+  gradf <- (x - 1) / ({(x - 1)^2 + s^2}^(1/2))
+  
+  return(gradf)
+}
+
+```
+
+
+Now we rerun the same optimization with this new objective function and its gradient.
+```{r optimize8_run, echo=TRUE}
+# x0, targets, constraints, and tolerances have not changed absapprox
+# nor have the x bounds, jacobian structure, nor most options for ipoptr
+
+# we need a new element in the inputs list, s
+inputs$s <- .01
+ns(inputs)
+
+opts$output_file <- paste0(PROJHOME, "/results/prob8.out")
+
+# opts$obj_scaling_factor <- 1e-4 # default 1 
+opts$obj_scaling_factor <- 1 # not sure what a good scaling factor should be, let' reset to the default
+# opts$nlp_scaling_max_gradient <- 100 # default 100 -- not changing this now
+
+opts$max_iter <- 500 # this objective function needs more iterations
+opts  
+
+# note the new function names below
+result <- ipoptr(x0 = x0,
+                 lb = xlb,
+                 ub = xub,
+                 eval_f = eval_f_absapprox, # arguments: x, inputs
+                 eval_grad_f = eval_grad_f_absapprox,
+                 eval_g = eval_g_sparse, # constraints LHS - a vector of values
+                 eval_jac_g = eval_jac_g,
+                 eval_jac_g_structure = eval_jac_g_structure_sparse,
+                 eval_h = eval_h_xtop, # the hessian is essential for this problem
+                 eval_h_structure = eval_h_structure,
+                 # the constraint bounds are given here
+                 constraint_lb = clb,
+                 constraint_ub = cub,
+                 opts = opts,
+                 inputs = inputs)
+
+result$status; result$message; result$iterations
+result$objective
+quantile(result$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+calcsums <- eval_g_sparse(x=result$solution, inputs)
+
+cbind(init_vals, targets_sparse, clb, calcsums, cub) %>%
+  kable(digits=0, format.args = list(big.mark=","))
+
+result8 <- result
+
+# compare objective function values - here use the old objective function applied to this 
+result1$objective; result2$objective; result3$objective; result4$objective; result5$objective; result6$objective; result7$objective; eval_f_xtop(result8$objective, inputs)
+
+# compare iterations - scaling was a big improvement
+result1$iterations; result2$iterations; result3$iterations; result4$iterations; result5$iterations; result6$iterations; result7$iterations; result8$iterations
+
+```
+
+# Now compare the distributions of x values for the 2 different objective functions
+
+The distributions don't seem that different, at least by a simple examination of quantiles. It's not clear how to interpret the differences given that the original weight enters into one objective function and not the other.
+
+```{r compare_twoobj, echo=TRUE}
+# compare quantiles
+quantile(result7$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+quantile(result8$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+```
+
 
   
 # Put it all together to solve a realistic problem
