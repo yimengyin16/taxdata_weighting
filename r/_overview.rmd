@@ -1546,7 +1546,7 @@ cbind(targets_sparse, init_vals, ratio=targets_sparse / init_vals)
 
 ```
 
-
+## Solve using our regular objective function
 Now we can solve the problem. I did a few things to make it easy to solve. 
 
 + First, I limited the perturbation to be within +/- 5% of the true values on the file.
@@ -1612,6 +1612,7 @@ result <- ipoptr(x0 = x0,
                  opts = opts,
                  inputs = inputs_full)
 
+result_full <- result
 result$status; result$message; result$iterations
 result$objective
 quantile(result$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
@@ -1623,6 +1624,89 @@ cbind(init_vals, targets_sparse, clb, calcsums, cub) %>%
 
 ```
 
+
+## Repeat with the approximate absolute value function
+```{r optimize_full_abs, echo=TRUE}
+inputs_full <- list()
+inputs_full$p <- 2
+inputs_full$s <- .01
+inputs_full$weights <- puf_full$weight
+inputs_full$ccoef_sparse <- ccoef_sparse
+inputs_full$jac_vector <- jac_flatten_sparse(inputs_full$ccoef_sparse)
+
+# create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
+# create vectors with constraint lower bounds and upper bounds
+# define tolerance - for simplicity, use the same for all, but that is not necessary
+tol <- .02 # 1% range
+clb <- targets_sparse
+clb <- clb - tol * abs(clb)
+
+cub <- targets_sparse
+cub <- cub + tol * abs(cub)
+
+cbind(init_vals, targets_sparse, clb, cub)
+
+eval_jac_g_structure_sparse <- define_jac_g_structure_sparse(inputs_full$ccoef_sparse)
+
+eval_h_structure <- hess_structure(length(inputs_full$weight))
+
+
+# set arbitrary bounds for x that fall inside the solution above
+xlb <- rep(.2, length(inputs_full$weights))
+xub <- rep(30, length(inputs_full$weights))
+
+opts <- list("print_level" = 0,
+             "file_print_level" = 5, # integer
+             "max_iter"=200)
+opts$linear_solver <- "ma57" # mumps pardiso ma27 ma57 ma77 ma86 ma97
+
+opts$output_file <- paste0(PROJHOME, "/results/prob_full_abs.out")
+# opts$obj_scaling_factor <- 1e-6 # default 1 
+opts$obj_scaling_factor <- 10 # not sure what a good scaling factor should be, let' reset to the default
+opts$nlp_scaling_max_gradient <- 10 # default 100
+opts  
+
+# best combination of obj_scaling_factor and scaling_max_gradient, for iter:
+# ma57:
+#  10, 1, 150
+# 10, 10, 131, 82 secs, ma57
+# 10, 10, 155, 327 secs, ma86
+# 10, 10, 162, 155 secs, ma97
+# 100, 100, 200 max, ma57
+# 100, 1, 200 max
+# 10, 100, 200 max
+# 100, 10, 200 max
+
+
+result <- ipoptr(x0 = x0,
+                 lb = xlb,
+                 ub = xub,
+                 eval_f = eval_f_absapprox, # arguments: x, inputs
+                 eval_grad_f = eval_grad_f_absapprox,
+                 eval_g = eval_g_sparse, # constraints LHS - a vector of values
+                 eval_jac_g = eval_jac_g,
+                 eval_jac_g_structure = eval_jac_g_structure_sparse,
+                 eval_h = eval_h_absapprox, # the hessian is essential for this problem
+                 eval_h_structure = eval_h_structure,
+                 # the constraint bounds are given here
+                 constraint_lb = clb,
+                 constraint_ub = cub,
+                 opts = opts,
+                 inputs = inputs_full)
+
+result_full_abs <- result
+result$status; result$message; result$iterations
+result$objective
+
+quantile(result$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+quantile(result_full_abs$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+calcsums <- eval_g_sparse(x=result$solution, inputs)
+
+cbind(init_vals, targets_sparse, clb, calcsums, cub) %>%
+  kable(digits=0, format.args = list(big.mark=","))
+
+```
   
   
 # TODO: more-complex problems and related complexities
