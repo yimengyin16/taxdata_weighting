@@ -3,7 +3,7 @@ List of options:
 
                                     Name   Value                # times used
                         file_print_level = 12                        1
-                             output_file = C:\Users\donbo\Dropbox\RPrograms PC\OSPC\taxdata_weighting/results/banana.out      1
+                             output_file = C:\Git\taxdata_weighting/results/banana.out      1
                              print_level = 0                         2
                                      tol = 1e-008                    2
 
@@ -12037,8 +12037,8 @@ Number of inequality constraint evaluations          = 0
 Number of equality constraint Jacobian evaluations   = 0
 Number of inequality constraint Jacobian evaluations = 0
 Number of Lagrangian Hessian evaluations             = 21
-Total CPU secs in IPOPT (w/o function evaluations)   =      0.680
-Total CPU secs in NLP function evaluations           =      0.119
+Total CPU secs in IPOPT (w/o function evaluations)   =      0.570
+Total CPU secs in NLP function evaluations           =      0.092
 
 EXIT: Optimal Solution Found.
 DenseVector "final x unscaled" with 2 elements:
