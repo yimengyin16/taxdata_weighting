@@ -1105,6 +1105,8 @@ ccoef_sparse <- recipe %>%
 # did any constraints drop out? yes
 count(ccoef_sparse, constraint_num, constraint_sort, constraint_name)
 
+ccoef_sparse
+
 ```
 
 

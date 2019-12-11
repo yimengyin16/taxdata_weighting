@@ -1,0 +1,516 @@
+---
+title: "State TaxData Enhancement Project -- Task 2"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+#
+
+
+# Planning
+
+## Data preparation
+1.  Extracting variables needed from the splite database Don created and save the resulting data as and RDS file
+
+## Creating the testing environment
+1.  Defining variable as needed 
+2.  Creating a sub-dataset with randomly selected observations from 5 larges states
+
+## Approach 1.1: optimization-based approach for individual states
+1.  Defining targets and constraints: functions to automate the process of creating constraints in batch.
+2.  Setting up the optimization problem using ipopt (sparse matrix approach)
+3.  Solving for new weights
+
+## Approach 1.2: optimizatino-based approach for all 5-states
+
+
+## Approach 2: MN-logit model for all states. 
+
+
+## Comparing re-weighted data to true data
+
+
+
+
+# Start of the program
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/Data/acs/"
+
+dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
+dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("task2", "libraries_djb.r"))
+source(here::here("task2", "functions_djb.r"))
+source(here::here("task2", "functions_optimization_djb.r"))
+
+```
+
+
+# ONETIME: Create an SQLITE database of all data for 15 million person records in the 2017 5-year ACS. Save selected variables to an RDS file.
+
+
+## Query database and create an RDS file with all persons and a selection of variables
+Steps:
+
+1.  Get state FIPS codes and abbreviations from an external file
+2.  Query the ACS database we created to get all records and the desired variables
+3.  Add state abbreviations to the file
+4.  Convert money variables (e.g., income) to 2017 dollars
+5.  Save as an RDS file
+
+
+```{r ONETIME_createPersonRecs, eval=FALSE}
+# Get FIPS codes and state abbreviations from the tigris package so that we can put state abbreviations on the persons file
+# data(package="datasets")
+codes <- unique(tigris::fips_codes %>% select(state, state_code) %>% mutate(state_code=as.numeric(state_code)))
+
+# read and save a file with a few key income variables, for ENTIRE population (15m records)
+# will use this later to construct samples we want
+# add certain useful information as well
+
+# identifying variables and other non-income variables:
+#   serialno -- housing unit serial number, so that we can link to housing-unit (household) data if we want
+#   sporder -- person order within household (serialno and sporder together uniquely identify persons)
+#   st -- state fips code
+#   pwgtp -- person weight, an integer
+#   adjinc -- adjustment factor because a record can come from any of 5 years (2013-2017), to convert income variables
+#             to 2017 values; must be divided by 1e6
+
+# income variables we want (there are more but this could be enough for our purposes):
+#   intp interest income 
+#   pap public assistance income
+#   pincp total person income
+#   retp retirement income
+#   ssip Supplemental Security Income
+#   ssp Social Security income
+#   wagp Wages
+
+# connect to the database
+acsdb <- dbConnect(RSQLite::SQLite(), dbf)
+tname <- "acs2017_5year"
+dbListTables(acsdb)
+dbListFields(acsdb, tname)
+
+# define what we want to get
+getall <- tbl(acsdb, tname) # dplyr does lazy loading, so this does not really grab full table
+str(getall)
+glimpse(getall)
+
+incvars <- c("intp", "pap", "pincp", "retp", "ssip", "ssp", "wagp")
+persons <- getall %>%
+  select(serialno, sporder, st, pwgtp, adjinc, sex, agep, mar, incvars)
+# NO: tail(persons) # tail not supported
+# DON'T USE glimpse on persons in this situation - it takes a long time
+# instead, create df persons2 and use glimpse
+
+# collect the data, make some adjustments
+a <- proc.time()
+persons2 <- collect(persons, n=Inf) %>%
+  mutate(stabbr=factor(st, levels=codes$state_code, labels=codes$state),
+         adjinc=adjinc / 1e6) %>%
+  select(serialno, sporder, st, stabbr, pwgtp, adjinc, everything()) %>%
+  mutate_at(vars(incvars), ~ . * adjinc)
+b <- proc.time()
+b - a # 90 secs
+  
+glimpse(persons2) # 15 m people
+count(persons2, sporder)
+system.time(saveRDS(persons2, paste0(destdir, "persons.rds"))) # 60 secs
+```
+
+
+# Query database and create an RDS file with all persons and a selection of variables
+
+
+# Examine different approaches to creating a state file
+
+## Extract a subset of persons from the slim permanent file we created
+This will be our test environment. We want it big enough to allow us to examine realistic issues, but small enough to work with quickly.
+
+We'll select a few states and a subset of records. Keep adults only.
+
+```{r check data, eval = FALSE}
+
+system.time(persons_all <- readRDS(paste0(destdir, "persons.rds"))) # about 30+/- secs
+glimpse(persons_all)
+ns(persons_all)
+
+persons_all
+
+```
+
+
+```{r get_extract, include=FALSE}
+
+# define desired states and numbers of records, then create extract
+
+sts <- c("CA", "NY", "TX", "IL", "FL") # 5 large very different states
+n <- 10e3
+set.seed(1234)
+samp <- persons_all %>% 
+  filter(stabbr %in% sts, !is.na(pincp), agep >= 18) %>% 
+  sample_n(n) %>% 
+  select(-st) %>% 
+  mutate(otherincp = pincp - (intp + pap + retp + ssip + ssp + wagp))
+
+glimpse(samp)
+ht(samp)
+summary(samp)
+
+count(samp, stabbr)
+count(samp, sex)
+quantile(samp$agep)
+
+```
+
+
+## Create some targets (constraints) to try to hit
+Get file totals by state and income group that can be used as constraints.
+
+Steps:
+
+1. Create an income-group variable
+2. Get weighted sums and counts, by state and income group, of each income variable. These are potential targets.
+3. Create a "noisy" version of the same in case we want to hit alternative targets
+
+
+
+```{r get_file_totals, include = FALSE}
+
+samp$pwgtp
+
+glimpse(samp)
+samp_clean <- samp %>% 
+  mutate(n = 1 / pwgtp, # the sampling ratio -- when multiplied by weight, will yield 1
+         pop = 1, 
+         incgroup = ntile(pincp, 10)) %>% 
+  # get an indicator for each income variable 
+  mutate_at(vars(intp, pap, pincp, retp, ssip, ssp, wagp, otherincp), list(n = ~ as.numeric(. !=0)))
+
+samp_clean %>% glimpse()
+
+#.. define constraints data: 1 per income group per state ----
+constraints_true <- samp_clean %>% 
+  group_by(stabbr, incgroup) %>% 
+  summarise_at(vars(n, pop, pincp, intp, pap, retp, ssip, ssp, wagp, otherincp,
+                    ends_with('_n')),
+               list(~sum(. * pwgtp))) %>% 
+  ungroup
+
+constraints_true
+
+# add a different amount of noise to each contraint
+set.seed(1234)
+noise <- 0.02
+constraints_noisy <- constraints_true %>% 
+  gather(variable, value, -stabbr, -incgroup, -n) %>% 
+  group_by(stabbr, incgroup, n, variable) %>% 
+  mutate(value = value * (1 + rnorm(n(), 0, noise))) %>% 
+  ungroup %>% 
+  spread(variable, value) %>% 
+  select(names(constraints_true))
+
+names(constraints_noisy) %>% sort
+names(constraints_true) %>% sort
+
+
+```
+
+
+## TEST: Create constraints for a single state, a single income range and just a few variables
+This is a simpler problem than what we ultimately want to solve. Its purpose is to check that our functions and method work.
+
+Define constraints (targets) for a single state and income group.
+
+Get the data subset we will use to try to hit those targets -- records in that income group, for all states (we will pretend we don't know what state each person in this subset is from).
+
+```{r test_constraints}
+
+# create a constraints data frame with true or noisy constraints
+constraints_df <- constraints_true
+# constraint_df <- constraints_noisy
+
+#.. define cars, consdata and sampdata for a specific subset of constraints ----
+# cvars has the names of the constraint variables
+# consdata will have 1 record with all constraints for the subset
+# sampdata will have all records in the subset, including constraints vars and indentifying/other vars. 
+
+# constraint variables
+# (cvars <- setdiff(names(constraints_df), c("stabbr", "incgroup", "n")))
+# ssip_n is the weighted number of people with SSI personal income (Supplemental Serucity income)
+(cvars <- c("pincp", "intp", "pap", "ssip_n"))
+
+# look at a subset that we'll want to use
+st <- "NY"
+ygrp <- 3
+
+constraints_df %>% filter(stabbr == st, incgroup ==  ygrp) %>% select(!!cvars) #
+samp_clean     %>% filter(stabbr == st, incgroup == ygrp)  %>% select(!!cvars) 
+
+# multiplying 
+consdata <- constraints_df %>% filter(stabbr ==  st, incgroup == ygrp) %>% select(!!cvars)
+sampdata <- samp_clean     %>% filter(incgroup == ygrp) %>% select(serialno, stabbr, pwgtp, !!cvars)
+
+count(sampdata, stabbr)
+
+# compare constraints to true data targets to verify whether consdata has noisy or true constraints
+bind_rows(consdata,
+          constraints_true %>% filter(stabbr == st, incgroup == ygrp) %>%  select(!!cvars))
+
+sampdata
+
+samp_clean
+# create initial weights -- scale the person weight pwgtp so that total number is the same as true
+# (it is possible to define better initial guesses but probably not worth the effort)
+(target <- sum(samp_clean %>% filter(incgroup == ygrp, stabbr == st) %>% .[["pwgtp"]])) # 3950
+(current <- sum(sampdata$pwgtp)) #21727 -- the sum is too large because the sample includes all geographies 
+target
+
+# define weight starting values for optimization routines, wts0
+wts0 <- sampdata$pwgtp*target / current
+sum(wts0)
+
+
+# verify that we can call the objective function
+
+objfn(wts0, sampdata, consdata)
+
+objfn
+calc_constraints
+
+
+calculated_constraints <- colSums(wts0 * select(sampdata, names(consdata)))
+# scale the constraints and the calculations by the constraint values
+diff_to_p <- (calculated_constraints / consdata - consdata / consdata)^2
+obj <- sum(diff_to_p)
+obj
+
+consdata
+calculated_constraints
+calculated_constraints / consdata
+
+calc_constraints(wts0, sampdata, names(consdata))
+consdata
+
+calc_constraints(wts0, sampdata, names(consdata)) / consdata
+
+sampdata$pwgtp %>% sum
+
+consdata
+
+
+```
+
+
+### TEST: Calibrate function from survey package
+```{r calibrate}
+
+sampdata_plus <- sampdata %>% mutate(wts_NY     = ifelse(stabbr == "NY", pwgtp, 0))
+
+wts_NY <- sampdata_plus$wts_NY
+wts_NY_rdm <- wts_NY + runif(100, 0, 2)
+wts_NY_rdm <- wts_NY_rdm * target / sum(wts_NY_rdm)
+
+
+consdata_aug <- consdata %>% mutate(wgt = target)
+sampdata_aug <- sampdata %>% mutate(wgt = wts0)
+
+objfn_aug <- function(weights, data, constraints, p=2){
+  # this objfn scales the data and constraint values used in the obj calculation
+  
+  calculated_constraints <- calc_constraints(weights, data, names(constraints))
+  
+  # scale the constraints and the calculations by the constraint values
+  diff_to_p <- (calculated_constraints / constraints - constraints / constraints)^p
+  diff_wgt_to_p <- ((sum(weights) - target)/target)^p
+  
+  obj <- sum(diff_to_p) + diff_wgt_to_p
+  return(obj)
+}
+  
+
+
+
+
+
+# call calibrate from the direct function we created for that purpose
+calib1 <- calibrate_nloptr(wts_NY_rdm, sampdata, consdata)
+wts_calib1 <- unname(weights(calib1))
+sum(wts_calib1) # we don't hit the targeted number of returns exactly because we did not make it a constraint
+target
+
+# how did we do compared to constraints and initial values?
+bind_rows(consdata, 
+          calc_constraints(wts0, sampdata, names(consdata)),
+          calc_constraints(wts_calib1, sampdata, names(consdata)))
+
+objfn(wts0, sampdata, consdata)
+objfn(wts_calib1, sampdata, consdata) # desired objective function is close to zero although calibrate mins different function
+
+# verify that our wrapper works#
+# Calibrate does not minimize our objective function. It is very fast and requires few iterations.
+# Still it is useful for comparison
+calib2 <- opt_wrapper(wts0, sampdata, consdata, method = "calibrate", objfn = objfn, maxiter = 10)
+str(calib2)
+wts_calib2 <- calib2$weights
+
+bind_rows(consdata,
+          calc_constraints(wts0, sampdata, names(consdata)),
+          calc_constraints(wts_calib1, sampdata, names(consdata)),
+          calc_constraints(wts_calib2, sampdata, names(consdata))
+          )
+
+# We have the same results.
+
+```
+
+
+### TEST: mma function from nloptr package
+```{r mma_nloptr}
+mma1 <- mma_nloptr(objfn_aug, wts_NY_rdm, sampdata, consdata) # we need to pass it an objective function
+wts_mma1 <- mma1$par
+sum(wts_mma1) # we don't hit the targeted number of returns exactly because we did not make it a constraint target
+
+# how did we do compared to constraints and initial values?
+bind_rows(consdata,
+          calc_constraints(wts0, sampdata, names(consdata)),
+          calc_constraints(wts_mma1, sampdata, names(consdata))
+          )
+
+objfn(wts0, sampdata, consdata)
+objfn(wts_mma1, sampdata, consdata) # desired objective function is close to zero although calibrate mins different function
+
+# verify that our wrapper works
+mma2 <- opt_wrapper(wts0, sampdata, consdata, method = 'mma', objfn = objfn, maxiter = 100)
+str(mma2)
+wts_mma2 <- mma2$weights
+
+bind_rows(consdata,
+          calc_constraints(wts0, sampdata, names(consdata)),
+          calc_constraints(wts_mma1, sampdata, names(consdata)),
+          calc_constraints(wts_mma2, sampdata, names(consdata)))
+
+
+
+
+
+
+```
+
+### TEST: simulated annealing
+```{r}
+# test the direct call
+
+
+
+
+
+set.seed(1234)
+a <- proc.time()
+simann1 <- sim_ann(objfn_aug, wts_NY_rdm, sampdata, consdata, 
+                   p = 2, niter = 10000, step = 0.1, 
+                   phase_iter = 500, max_recshare = .3, max_wtshare = 1)
+
+b <- proc.time()
+b - a
+# this will be very slow for large problems...
+
+str(simann1) # 7.86e-06 8.5e-08
+wts_simann1 <- simann1$best_weights
+sum(wts_simann1) # we don't hit the targeted number of returns exactly because we did not make it a constraint
+target
+
+
+
+
+
+
+
+sampdata_plus <- sampdata %>% mutate(wts_mma = wts_mma1, 
+                                    wts_calib = wts_calib1,
+                                    wts_simann = wts_simann1,
+                                    wts_NY     = ifelse(stabbr == "NY", pwgtp, 0))
+
+
+sampdata_plus %>% 
+  group_by(stabbr) %>% 
+  summarise(wts_mma     = sum(wts_mma),
+            wts_calib   = sum(wts_calib),
+            wts_simann  = sum(wts_simann),
+            pwgtp       = sum(pwgtp*target / current))
+
+
+
+objfn(wts0, sampdata, consdata)
+objfn(wts_calib1, sampdata, consdata)
+objfn(wts_mma1, sampdata, consdata)
+objfn(wts_simann1, sampdata, consdata)
+objfn(wts_NY_rdm, sampdata, consdata)
+
+
+bind_rows(
+consdata,
+calc_constraints(wts_calib1, sampdata, names(consdata)),
+calc_constraints(wts_mma1, sampdata, names(consdata)),
+calc_constraints(wts_simann1, sampdata, names(consdata)),
+calc_constraints(wts_NY, sampdata, names(consdata))
+)
+
+
+hist(wts0, breaks = 20)
+hist(wts_calib1, breaks = 20)
+hist(wts_mma1, breaks = 20)
+hist(wts_simann1, breaks = 20)
+
+(wts_simann1==0) %>% sum
+(wts_mma1==0) %>% sum
+
+# Question: 
+# In this simplified question, we know wts_NY is the true global optimum, but 
+# even the simann method failed to find it. 
+# Maybe this is because the problem is so simple, that are a large number of weight vector
+# that can produce a reasonably small value for the objective function, so these methods just stop there. 
+
+# How to set up the problem:
+#  -  what variables to use in objective function?
+#  -  what varabbles to use in constraints
+
+# How to evaluate the results
+# hitting the target 
+# 'smoothness' within each distributional target. (simann creates many 0s, which may make the distribution unsmoothed. )
+
+
+```
+
+
+
+
+
+
+
+
+
+
