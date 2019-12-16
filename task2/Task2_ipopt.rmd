@@ -1,0 +1,408 @@
+---
+title: "State TaxData Enhancement Project -- Task 2"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+
+# Start of the program
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/Data/acs/"
+
+#dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
+#dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("task2", "libraries_djb.r"))
+source(here::here("task2", "functions_djb.r"))
+source(here::here("task2", "functions_optimization_djb.r"))
+
+```
+
+
+
+# Extract a subset of persons from the slim permanent file we created
+This will be our test environment. We want it big enough to allow us to examine realistic issues, but small enough to work with quickly.
+
+We'll select a few states and a subset of records. Keep adults only.
+
+```{r check data, eval = FALSE}
+
+system.time(persons_all <- readRDS(paste0(destdir, "persons.rds"))) # about 30+/- secs
+glimpse(persons_all)
+ns(persons_all)
+
+persons_all
+
+```
+
+
+# Make sure that `ipoptr` works by solving the simple "banana" test problem included with the package
+Solve the Rosenbrock Banana test problem, a nonlinear function of 2 variables.
+
+Don't worry now about reading the output. If you see "EXIT: Optimal Solution Found." then everything worked fine.
+
+```{r echo = TRUE, message=FALSE, warning=FALSE}
+
+# Rosenbrock Banana function
+eval_f <- function(x) {
+  100 * (x[2] - x[1] * x[1])^2 + (1 - x[1])^2
+}
+
+## Gradient of Rosenbrock Banana Function
+eval_grad_f <- function(x) {
+  c( -400 * x[1] * (x[2] - x[1] * x[1]) - 2 * (1 - x[1]),
+             200 * (x[2] - x[1] * x[1])) 
+}
+
+# The Hessian for this problem is actually dense, 
+# This is a symmetric matrix, fill the lower left triangle only.
+eval_h_structure <- list(c(1), c(1, 2))
+
+eval_h <- function(x, obj_factor, hessian_lambda){
+  obj_factor * c( 2 - 400*(x[2] - x[1]^2) + 800*x[1]^2,  # 1,1
+                  -400*x[1],                             # 2,1
+                  200)
+  
+}
+
+# Initial values
+x0 <-  c(-1.2, 1)
+
+opts <- list("print_level" = 5,
+             "file_print_level" = 12,
+             "tol" = 1.0e-8)
+
+opts$output_file <- paste0(PROJHOME, '/results/banana.out')
+
+
+# solve Rosenbrock Banana function with analytic hessian
+print(ipoptr(x0 = x0,
+             eval_f      = eval_f,
+             eval_grad_f = eval_grad_f,
+             eval_h      = eval_h,
+             eval_h_structure = eval_h_structure,
+             opts = opts
+             ))
+
+
+
+
+```
+
+
+# Set things up so that we can test `ipoptr` on PUF targeting problems
+
+## loading a ACS subset to work with 
+
+
+```{r}
+
+system.time(persons_all <- readRDS(paste0(destdir, "persons.rds"))) # about 30+/- secs
+glimpse(persons_all)
+ns(persons_all)
+
+states_select <- c("CA", "NY", "TX", "IL", "FL") # 5 large very different states
+n_sample      <- 10e3
+set.seed(1234)
+
+acssub <- persons_all %>% 
+  filter(stabbr %in% states_select, !is.na(pincp), agep >= 18) %>% 
+  sample_n(n_sample) %>% 
+  select(-st) %>% 
+  mutate(otherincp = pincp - (intp + pap + retp + ssip + ssp + wagp))
+
+glimpse(acssub)
+ht(acssub)
+summary(acssub)
+
+count(samp, stabbr) %>% mutate(share = 100 * n / sum(n))
+count(persons_all, stabbr) %>% filter(stabbr %in% states_select) %>% mutate(share = 100 * n / sum(n))
+
+count(samp, sex) %>% mutate(share = 100 * n / sum(n))
+persons_all %>% filter(stabbr %in% states_select) %>% count(sex) %>% mutate(share = 100 * n / sum(n))
+
+quantile(samp$agep)
+quantile(persons_all %>% filter(stabbr %in% states_select, agep>=18) %>% pull(agep))
+
+quantile(samp$pincp)
+quantile(persons_all %>% filter(stabbr %in% states_select, agep>=18) %>% pull(pincp))
+quantile(persons_all %>% filter(agep>=18) %>% pull(pincp))
+
+
+ascsub # this corresponds to pufsub in the original instruction program
+
+## Key variable 
+
+# serialno: family ID
+# sporder : family member ID
+# stabbr  : state abbreviation
+# pwgtp   : person weight, an integer NOTE: do not need to be divided by 100 as in the case of PUF
+# sex
+# agep    : age
+# mar
+# intp    : interest income 
+# pap     : public assistance income
+# pincp   : total person income
+# retp    : retirement income
+# ssip    : Supplemental Security Income
+# ssp     : Social Security income
+# wagp    : Wages
+
+#------------------------------------------
+
+
+### Original instruction
+# # keep a few variables:
+# # RECID unique id
+# # E00100 AGI
+# # E00200 wages
+# # E00300 interest received -- not kept
+# # E01700 pension income in AGI
+# # E02000 schedule E net income 
+# # S006 record weight as an integer - must be divided by 100
+# vars <- c("RECID", "E00100", "E00200", "E01700", "E02000", "S006")
+# set.seed(1234)
+# pufsub <- pufraw %>% 
+#   sample_n(5000) %>%
+#   select(vars) %>%
+#   mutate(weight=S006 / 100, otheragi=E00100 - E00200 - E01700 - E02000) %>%
+#   select(-S006) %>%
+#   select(RECID, weight, everything())
+# 
+# # glimpse(pufsub)
+# # ht(pufsub)
+
+```
+
+
+## Define an objective function for use with PUF targeting
+### What does an objective function look like?
+We're going to choose new weights for the PUF that will achieve some targets (constraints). In these exaples, we want to choose weights that are close to the original weights on the file, but hit the targets. We'll penalize new weights that are far from the old weights.
+
+We'll compute the ratio of the new weight to the current weight - call it x (a vector of weight adjustment multipliers, one for each record) and minimize the following objective (penalty) function based upon this ratio:
+
+$$min \sum_{x} w_1(x^2 + x^{-2} -2)$$
+
+where w1 is the original weight and x is the ratio of the new weight (call it w2) to the original weight (i.e., $x=w_2 / w_1$).
+
+
+### Implement an objective function and its gradient
+Define R functions that will be used within ipoptr (and can be used externally, too) to calculate, for any given x vector:
+
++ The objective function evaluated at point x (a vector). It returns a single value.
++ The gradient of the objective function evaluated at point x. It returns a vector of values, the same length as x, where each element is the partial derivative of the objective function with respect to the corresponding element in x. This is used by IPOPT in choosing a search direction. While some non-linear programming (NLP) methods do not require derivatives, IPOPT does. While it is possible to write a function that calculates approximate derivatives, it is better to specify analytic derivatives when possible.
+
+In addition to passing x to each function we will pass a list, that I call `inputs`, that can have anything we want it to have. The reason for this is that `ipoptr` requires any function it uses to receive the same arguments. Passing the same list to each function allows us to have functions that use different items (all contained within inputs) but receive the same arguments.
+
+We could call these functions anything. I call the objective function `eval_f_xtop` which uses the name `ipoptr` uses for the objective (eval_f) plus a suffix, xtop, which stands for x to the power p (we could use any even power for the objective funciton, not just 2 as in the example above). Similarly, I call the gradient `eval_grad_f_xtop`.
+
+
+```{r functions_obj, echo = TRUE}
+
+eval_f_xtop <- function(x, inputs) {
+  # .. objective function - evaluate to a single number ----
+  # returns a single value
+  
+  #ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
+  # here are the objective function, the 1st deriv, and the 2nd deriv
+  # http://www.derivative-calculator.net/
+  # w{x^p + x^(-p) - 2}                                 objective function
+  # w{px^(p-1) - px^(-p-1)}                             first deriv
+  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  
+  p <- inputs$p
+  w <- inputs$weight
+  
+  obj <- sum(w * (x^p + x^(-p) -2))
+
+}
+
+eval_grad_f_xtop <- function(x, inputs){
+  #.. gradient of objective function - a vector length x ----
+  # giving the partial derivatives of obj wrt each x[i]
+  # returns one value per element of x
+  
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
+  # here are the objective function, the 1st deriv, and the 2nd deriv
+  # http://www.derivative-calculator.net/
+  # w{x^p + x^(-p) - 2}                                 objective function
+  # w{px^(p-1) - px^(-p-1)}                             first deriv
+  # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
+  
+  # make it easier to read:
+  p <- inputs$p
+  w <- inputs$weight
+  
+  gradf <- w * (p * x^(p-1) - p * x^(-p-1))
+  
+}
+
+```
+
+
+Calculate the objective function and its gradient for a few values, as a test:
+
+```{r echo = TRUE}
+
+x0 <- c(1, .1, 10)
+inputs <- list()
+inputs$p <- 2
+
+inputs$weight <- 1
+for(i in 1:length(x0)) {print(eval_f_xtop(x0[i], inputs))}
+
+inputs$weight <- c(1, 1, 1)
+eval_f_xtop(x0, inputs) %>% print
+eval_grad_f_xtop(x0, inputs) %>% print
+
+```
+
+
+## Define constraints and associated functions
+We will define a set of targets for the reweighted PUF, or "constraints" in NLP nomenclature.
+
+Examples of constraints are:
+
++ The sum of weighted adjusted gross income (E00100) or another variable in the file using a given set of weights. For example:
+++ sum(E00100 * weight) gives the sum with current weights, and
+++ sum(E00100 * weight * x) gives the sum with new weights, if x is the ratio of new weights to original weights
++ The number of weighted tax returns in the file
++ The sum of weighted negative values for a variable. For example, E02000 (rental income etc.) can be negative (a loss). We might want to target the sum of these negative values separately from the sum of positive values for the variable.
++ The weighted number of negative values for a variable (e.g., the number of returns, weighted, that have losses).
++ Any of the above, within specific segments of the file, such as the number returns with negative rental income, within the subset of the file that has married couples with income between $50k and $75k. Obviously it only makes sense to construct a target for such a narrow portion of the file if we think we can estimate or forecast what a proper target should be.
+
+The file with existing weights has total AGI of `r scales::comma(sum(pufsub$E00100 * pufsub$weight))` and total wages of `r scales::comma(sum(pufsub$E00200 * pufsub$weight))`. We might (if we had information that suggested this), set a target for AGI that is 10% greater (`r scales::comma(sum(pufsub$E00100 * pufsub$weight)*1.1)`) while at the same time setting a target for wages that is 5% less (`r scales::comma(sum(pufsub$E00200 * pufsub$weight)*.95)`). 
+
+
+### Creating a set of constraint coefficients using dense matrices
+We need to tell `ipoptr` (which tells IPOPT) how the targeted values on our reweighted file will change as we change our variable x -- that is we need to define the first partial derivative of each constraint with respect to each x variable. In our problem, these are constants, so I call them constraint coefficients.
+
+There is more than one way to set up the constraints for the problem. For now, not worrying about computer resources, we'll use dense matrices. Imagine a matrix where every row is a record in our data file, every column represents a possible constraint of interest (e..g, the weighted sum of AGI, or the weighted number of returns with negative rental income), and every cell in the matrix represents how much the constraint (e.g,. the weighted sum of AGI) will change if we change the ratio x applicable to that return.
+
+Suppose that the j-th column of this matrix represents the constraint for the weighted sum of positive AGI; let's name it E00100_sumpos.
+Suppose that the i-th row of this matrix, tax return i, has AGI of $10,000 and an original weight of 17. Then cell [i, j] in this matrix would be 10,000 x 17 or 170000 ($170k), which is how much aggregate AGi would increase if we increased x[i] by 1. For example, if we increased the weight for return i by 10% (x[i] is 1.1 and the change in x[i] is 0.1), total weighted AGI would increase by 10,000 x 17 x 10%.
+
+
+#### Define functions to help in developing constraint coefficients
+The functions below calculate constraint coefficients for common constraints of interest. var is a vector of values for a variable -- for example, var[i] in the example above is 10,000 and weight[i] is 17
+
+
+```{r fun}
+# Functions to compute constraint coefficients
+nnz  <- function(var, weight) {(var != 0) * weight} # weighted number of returns with non-zero values
+nz   <- function(var, weight) {(var != 0) * weight} # weighted number of returns with zero values
+npos <- function(var, weight) {(var >= 0) * weight} # weighted number of returns with positive values}
+nneg <- function(var, weight) {(var <= 0) * weight} # weighted number of returns with negative values
+
+sumval <- function(var, weight) { weight * var} # wegithed sum of non zero value
+sumpos <- function(var, weight) {(var > 0) * weight * var}
+sumneg <- function(var, weight) {(var < 0) * weight * var}
+  
+```
+
+#### Create a constraint-coefficient matrix-like data frame
+Now we apply these functions to our data to construct constraint coefficients for potential constraints, for a few selected variables. This is not necessarily the most efficient way to do this. For example we might want to first decide which constraints we care about, and only compute them. With small datasets, this is not an important consideration.
+
+Each column will represent a constraint, and each row will correspond to a row in the data.
+
+```{r echo = TRUE}
+
+ccvars    <- c("pincp", "wagp", "intp")
+ccoef_all <- acssub %>% 
+  mutate_at(vars(!!ccvars),
+            list(npos   = ~npos(., pwgtp),
+                 sumval = ~sumval(., pwgtp),
+                 nneg   = ~nneg(., pwgtp)
+                 ))
+
+
+
+ht(ccoef_all)
+
+```
+
+
+### Define generic function to calculate constraint sums based on a given data file and an x vector
+```{r echo=TRUE}
+
+calc_constraints <- function(ccoef, constraint_vars, x = rep(1, nrow(ccoef))){
+  # calculate weighted sums of constraint_vars that are in data, using an optional multiplier x
+  # ccoef: df with 1 colum per constraint variable (plus possibly additional conlums); 1 row per person (tax return)
+  # constraint_vars: character vector
+  # x: numeric vector of adjustment factor
+  # return: a named vector of constraint sums
+  colSums(x * select(ccoef, !!constraint_vars) )
+}
+
+
+```
+
+Check: Print sums on file as it exists, and sums with alternative weights
+
+```{r}
+# calculate values on the file and for some randomly chosen targets
+
+vars <- str_subset(names(ccoef_all), "_")
+vars
+
+filesums <- calc_constraints(ccoef_all, vars)
+
+#check
+sum(acssub$pwgtp * acssub$pincp)
+sum(ccoef_all$pincp_sumval)
+
+
+# pick som random x's
+set.seed(6)
+x <- rnorm(nrow(ccoef_all), 1, .2)
+targets <- calc_constraints(ccoef_all, vars, x)
+
+cbind(filesums, targets, gapratio = targets / filesums)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

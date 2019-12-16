@@ -20,3 +20,5 @@ library("knitr")
 library("kableExtra")
 
 library("DBI")
+
+library("ipoptr")

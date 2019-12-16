@@ -16,9 +16,6 @@ editor_options:
 -->
 
 
-#
-
-
 # Planning
 
 ## Data preparation
@@ -145,9 +142,7 @@ system.time(saveRDS(persons2, paste0(destdir, "persons.rds"))) # 60 secs
 # Query database and create an RDS file with all persons and a selection of variables
 
 
-# Examine different approaches to creating a state file
-
-## Extract a subset of persons from the slim permanent file we created
+# Extract a subset of persons from the slim permanent file we created
 This will be our test environment. We want it big enough to allow us to examine realistic issues, but small enough to work with quickly.
 
 We'll select a few states and a subset of records. Keep adults only.
@@ -167,12 +162,12 @@ persons_all
 
 # define desired states and numbers of records, then create extract
 
-sts <- c("CA", "NY", "TX", "IL", "FL") # 5 large very different states
-n <- 10e3
+states_select <- c("CA", "NY", "TX", "IL", "FL") # 5 large very different states
+n_sample      <- 10e3
 set.seed(1234)
 samp <- persons_all %>% 
-  filter(stabbr %in% sts, !is.na(pincp), agep >= 18) %>% 
-  sample_n(n) %>% 
+  filter(stabbr %in% states_select, !is.na(pincp), agep >= 18) %>% 
+  sample_n(n_sample) %>% 
   select(-st) %>% 
   mutate(otherincp = pincp - (intp + pap + retp + ssip + ssp + wagp))
 
@@ -180,21 +175,126 @@ glimpse(samp)
 ht(samp)
 summary(samp)
 
-count(samp, stabbr)
-count(samp, sex)
+
+
+count(samp, stabbr) %>% mutate(share = 100 * n / sum(n))
+count(persons_all, stabbr) %>% filter(stabbr %in% states_select) %>% mutate(share = 100 * n / sum(n))
+
+count(samp, sex) %>% mutate(share = 100 * n / sum(n))
+persons_all %>% filter(stabbr %in% states_select) %>% count(sex) %>% mutate(share = 100 * n / sum(n))
+
 quantile(samp$agep)
+quantile(persons_all %>% filter(stabbr %in% states_select, agep>=18) %>% pull(agep))
+
+
+samp %>% ht
 
 ```
 
 
-## Create some targets (constraints) to try to hit
+# Approach 1: Re-weighting to hit targets of individual states
+
+Method 1: Minimize the distance from the original weights with constraints for variables 
+Method 2: Minimize the error of a subset of target variables with constraints for other variables.
+
+
+
+## Method 1: Minimizing the distance from the original weights 
+
+Create some targets (constraints) to try to hit
 Get file totals by state and income group that can be used as constraints.
 
-Steps:
 
+Steps:
 1. Create an income-group variable
 2. Get weighted sums and counts, by state and income group, of each income variable. These are potential targets.
 3. Create a "noisy" version of the same in case we want to hit alternative targets
+
+
+
+
+
+
+
+
+```{r optimize_full, echo=TRUE}
+
+# Inputs (arguments for ipoptr) needed to set up the opimization problem using ipopt in r 
+
+
+
+## inputs: an list of all inputs
+
+inputs_full   <- list()
+inputs_full$p <- 2 # power in the objective function
+inputs_full$weights <- puf_full$weight
+inputs_full$ccoef_sparse <- ccoef_sparse
+inputs_full$jac_vector <- jac_flatten_sparse(inputs_full$ccoef_sparse)
+
+
+
+# create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
+# create vectors with constraint lower bounds and upper bounds
+# define tolerance - for simplicity, use the same for all, but that is not necessary
+tol <- .02 # 1% range
+clb <- targets_sparse
+clb <- clb - tol * abs(clb)
+
+cub <- targets_sparse
+cub <- cub + tol * abs(cub)
+
+cbind(init_vals, targets_sparse, clb, cub)
+
+eval_jac_g_structure_sparse <- define_jac_g_structure_sparse(inputs_full$ccoef_sparse)
+
+eval_h_structure <- hess_structure(length(inputs_full$weight))
+
+
+# set arbitrary bounds for x that fall inside the solution above
+xlb <- rep(.2, length(inputs_full$weights))
+xub <- rep(30, length(inputs_full$weights))
+
+opts <- list("print_level" = 0,
+             "file_print_level" = 5, # integer
+             "max_iter"=200)
+opts$linear_solver <- "ma57" # mumps pardiso ma27 ma57 ma77 ma86 ma97
+
+opts$output_file <- paste0(PROJHOME, "/results/prob_full.out")
+opts$obj_scaling_factor <- 1e-6 # default 1 
+opts$nlp_scaling_max_gradient <- 100 # default 100 -- not changing this now
+opts  
+
+result <- ipoptr(x0 = x0,
+                 lb = xlb,
+                 ub = xub,
+                 eval_f = eval_f_xtop, # arguments: x, inputs
+                 eval_grad_f = eval_grad_f_xtop,
+                 eval_g = eval_g_sparse, # constraints LHS - a vector of values
+                 eval_jac_g = eval_jac_g,
+                 eval_jac_g_structure = eval_jac_g_structure_sparse,
+                 eval_h = eval_h_xtop, # the hessian is essential for this problem
+                 eval_h_structure = eval_h_structure,
+                 # the constraint bounds are given here
+                 constraint_lb = clb,
+                 constraint_ub = cub,
+                 opts = opts,
+                 inputs = inputs_full)
+
+result_full <- result
+result$status; result$message; result$iterations
+result$objective
+quantile(result$solution, probs=c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+calcsums <- eval_g_sparse(x=result$solution, inputs)
+
+cbind(init_vals, targets_sparse, clb, calcsums, cub) %>%
+  kable(digits=0, format.args = list(big.mark=","))
+
+```
+
+
+
+
 
 
 
@@ -238,6 +338,12 @@ names(constraints_true) %>% sort
 
 
 ```
+
+
+
+
+
+
 
 
 ## TEST: Create constraints for a single state, a single income range and just a few variables
@@ -386,125 +492,6 @@ bind_rows(consdata,
 # We have the same results.
 
 ```
-
-
-### TEST: mma function from nloptr package
-```{r mma_nloptr}
-mma1 <- mma_nloptr(objfn_aug, wts_NY_rdm, sampdata, consdata) # we need to pass it an objective function
-wts_mma1 <- mma1$par
-sum(wts_mma1) # we don't hit the targeted number of returns exactly because we did not make it a constraint target
-
-# how did we do compared to constraints and initial values?
-bind_rows(consdata,
-          calc_constraints(wts0, sampdata, names(consdata)),
-          calc_constraints(wts_mma1, sampdata, names(consdata))
-          )
-
-objfn(wts0, sampdata, consdata)
-objfn(wts_mma1, sampdata, consdata) # desired objective function is close to zero although calibrate mins different function
-
-# verify that our wrapper works
-mma2 <- opt_wrapper(wts0, sampdata, consdata, method = 'mma', objfn = objfn, maxiter = 100)
-str(mma2)
-wts_mma2 <- mma2$weights
-
-bind_rows(consdata,
-          calc_constraints(wts0, sampdata, names(consdata)),
-          calc_constraints(wts_mma1, sampdata, names(consdata)),
-          calc_constraints(wts_mma2, sampdata, names(consdata)))
-
-
-
-
-
-
-```
-
-### TEST: simulated annealing
-```{r}
-# test the direct call
-
-
-
-
-
-set.seed(1234)
-a <- proc.time()
-simann1 <- sim_ann(objfn_aug, wts_NY_rdm, sampdata, consdata, 
-                   p = 2, niter = 10000, step = 0.1, 
-                   phase_iter = 500, max_recshare = .3, max_wtshare = 1)
-
-b <- proc.time()
-b - a
-# this will be very slow for large problems...
-
-str(simann1) # 7.86e-06 8.5e-08
-wts_simann1 <- simann1$best_weights
-sum(wts_simann1) # we don't hit the targeted number of returns exactly because we did not make it a constraint
-target
-
-
-
-
-
-
-
-sampdata_plus <- sampdata %>% mutate(wts_mma = wts_mma1, 
-                                    wts_calib = wts_calib1,
-                                    wts_simann = wts_simann1,
-                                    wts_NY     = ifelse(stabbr == "NY", pwgtp, 0))
-
-
-sampdata_plus %>% 
-  group_by(stabbr) %>% 
-  summarise(wts_mma     = sum(wts_mma),
-            wts_calib   = sum(wts_calib),
-            wts_simann  = sum(wts_simann),
-            pwgtp       = sum(pwgtp*target / current))
-
-
-
-objfn(wts0, sampdata, consdata)
-objfn(wts_calib1, sampdata, consdata)
-objfn(wts_mma1, sampdata, consdata)
-objfn(wts_simann1, sampdata, consdata)
-objfn(wts_NY_rdm, sampdata, consdata)
-
-
-bind_rows(
-consdata,
-calc_constraints(wts_calib1, sampdata, names(consdata)),
-calc_constraints(wts_mma1, sampdata, names(consdata)),
-calc_constraints(wts_simann1, sampdata, names(consdata)),
-calc_constraints(wts_NY, sampdata, names(consdata))
-)
-
-
-hist(wts0, breaks = 20)
-hist(wts_calib1, breaks = 20)
-hist(wts_mma1, breaks = 20)
-hist(wts_simann1, breaks = 20)
-
-(wts_simann1==0) %>% sum
-(wts_mma1==0) %>% sum
-
-# Question: 
-# In this simplified question, we know wts_NY is the true global optimum, but 
-# even the simann method failed to find it. 
-# Maybe this is because the problem is so simple, that are a large number of weight vector
-# that can produce a reasonably small value for the objective function, so these methods just stop there. 
-
-# How to set up the problem:
-#  -  what variables to use in objective function?
-#  -  what varabbles to use in constraints
-
-# How to evaluate the results
-# hitting the target 
-# 'smoothness' within each distributional target. (simann creates many 0s, which may make the distribution unsmoothed. )
-
-
-```
-
 
 
 
