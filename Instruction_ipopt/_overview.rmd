@@ -139,7 +139,7 @@ pufraw <- read_csv(paste0(pufdir, "puf2011.csv"), col_types = cols(.default= col
 # glimpse(pufraw)
 ns(pufraw)
 
-(pufraw$S006/100) %>% sum
+# (pufraw$S006/100) %>% sum
 
 # keep a few variables:
 # RECID unique id
@@ -562,7 +562,7 @@ eval_h_xtop <- function(x, obj_factor, hessian_lambda, inputs){
   # w{px^(p-1) - px^(-p-1)}                             first deriv
   # p*w*x^(-p-2)*((p-1)*x^(2*p)+p+1)                    second deriv
   
-  # make it easier to read:
+  # make it easier to read: 
   p <- inputs$p
   w <- inputs$weight
   
@@ -639,7 +639,7 @@ inputs$constraint_vars <- constraint_vars
 inputs$jac_vector <- jac_flatten(inputs$ccoef)
 
 # set initial values of x
-x0 <- rep(1, length(inputs$weights))
+x0 <- rep(1, length(inputs$weight))
 
 # create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
 clb <- targets[inputs$constraint_vars]

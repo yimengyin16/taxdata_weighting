@@ -29,7 +29,11 @@ editor_options:
 1.  Defining targets and constraints: functions to automate the process of creating constraints in batch.
 2.  Setting up the optimization problem using ipopt (sparse matrix approach)
 3.  Solving for new weights
-
+   
+   1.1.1 minimizing distance from the initial weights with constraints
+   1.1.2 minimizing the sum distance between targets and re-weighted sums, with no constraints  
+   
+   
 ## Approach 1.2: optimizatino-based approach for all 5-states
 
 

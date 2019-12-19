@@ -1,0 +1,413 @@
+---
+title: "State TaxData Enhancement Project -- Task 2"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+
+# Start of the program
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/Data/acs/"
+
+#dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
+#dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("task2", "libraries_djb.r"))
+source(here::here("task2", "functions_djb.r"))
+source(here::here("task2", "functions_optimization_djb.r"))
+source(here::here("task2", "functions_ipoptr.R"))
+```
+
+
+# Put it all together to solve a realistic problem
+Using the functions we've already created, we'll use the full PUF and set targets by AGI range for several variables.
+
+```{r}
+
+persons_all <- readRDS(paste0(destdir, "persons.rds"))
+glimpse(persons_all)
+ns(persons_all)
+
+states_select <- c("CA", "NY", "TX", "IL", "FL") # 5 large very different states
+n_sample      <- 50e3
+set.seed(1234)
+
+acs_subset <- persons_all %>% 
+  filter(stabbr %in% states_select, !is.na(pincp), agep >= 18) %>% 
+  sample_n(n_sample) %>% 
+  select(-st) %>% 
+  mutate(otherincp = pincp - (intp + pap + retp + ssip + ssp + wagp))
+
+glimpse(acs_subset)
+
+
+saveRDS(acs_subset, paste0(PROJHOME, "/data/acs_subset.rds"))
+
+glimpse(acs_subset)
+ht(acs_subset)
+summary(acs_subset)
+
+# count(samp, stabbr) %>% mutate(share = 100 * n / sum(n))
+# count(persons_all, stabbr) %>% filter(stabbr %in% states_select) %>% mutate(share = 100 * n / sum(n))
+# 
+# count(samp, sex) %>% mutate(share = 100 * n / sum(n))
+# persons_all %>% filter(stabbr %in% states_select) %>% count(sex) %>% mutate(share = 100 * n / sum(n))
+# 
+# quantile(samp$agep)
+# quantile(persons_all %>% filter(stabbr %in% states_select, agep>=18) %>% pull(agep))
+# 
+# quantile(samp$pincp)
+# quantile(persons_all %>% filter(stabbr %in% states_select, agep>=18) %>% pull(pincp))
+# quantile(persons_all %>% filter(agep>=18) %>% pull(pincp))
+# 
+
+
+## Key variable 
+
+# serialno: family ID
+# sporder : family member ID
+# stabbr  : state abbreviation
+# pwgtp   : person weight, an integer NOTE: do not need to be divided by 100 as in the case of PUF
+# sex
+# agep    : age
+# mar
+# intp    : interest income 
+# pap     : public assistance income
+# pincp   : total person income
+# retp    : retirement income
+# ssip    : Supplemental Security Income
+# ssp     : Social Security income
+# wagp    : Wages
+
+#------------------------------------------
+
+
+### Original instruction
+# # keep a few variables:
+# # RECID unique id
+# # E00100 AGI
+# # E00200 wages
+# # E00300 interest received -- not kept
+# # E01700 pension income in AGI
+# # E02000 schedule E net income 
+# # S006 record weight as an integer - must be divided by 100
+# vars <- c("RECID", "E00100", "E00200", "E01700", "E02000", "S006")
+# set.seed(1234)
+# pufsub <- pufraw %>% 
+#   sample_n(5000) %>%
+#   select(vars) %>%
+#   mutate(weight=S006 / 100, otheragi=E00100 - E00200 - E01700 - E02000) %>%
+#   select(-S006) %>%
+#   select(RECID, weight, everything())
+# 
+# # glimpse(pufsub)
+# # ht(pufsub)
+
+```
+
+Define constraint coefficients.
+
+```{r}
+
+acs_subset <- readRDS(paste0(PROJHOME, "/data/acs_subset.rds"))
+
+# create a recipe that says which ccoef's we want.
+
+# As before, we want a df with 3 columns:
+#  vname:     a character variable name
+#  valgroup:  a character variable with a logical expression defining the data subgroup
+#  fn:        a character variable giving a function name (or calculation label)
+#             right now, the function get_ccoefs has definitions for sumval, npos, and nnegs
+#             so that's what we'll use, but we could expand it of course
+
+# Create a sub-recipe for file totals - must make sure valgroup is character 
+totals_recipe <- read_csv("
+  vname, valgroup, fn
+  pincp, TRUE, sumval
+  pincp, TRUE, npos
+  wagp,  TRUE, sumval
+  intp,  TRUE, sumval
+  intp,  TRUE, npos
+  retp,  TRUE, sumval", col_types = cols(.default=col_character()))
+totals_recipe
+
+totals_recipe <- read_csv("
+  vname, valgroup, fn
+  pincp, TRUE, sumval
+  pincp, TRUE, npos
+  wagp,  TRUE, sumval
+  intp,  TRUE, sumval
+  intp,  TRUE, npos
+  retp,  TRUE, sumval", col_types = cols(.default=col_character()))
+totals_recipe
+
+
+
+# names(persons_all)
+# acs_subset[acs_subset$pincp <= 0, ]
+
+# Create a sub-recipe for pincp ranges
+# Here we'll define pincp ranges seperately, for convenience
+# There may be more efficient (less labor-intensive) ways to do this...
+
+# 5 agi ranges
+acs_subset$pincp %>% quantile(c(0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1)) # percentiles of the subset 
+persons_all$pincp[persons_all$stabbr %in% states_select & persons_all$agep >= 18 ] %>% quantile(c(0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1), na.rm = TRUE) # percentiles of the whole dataset
+
+pincp_ranges <- read_csv("
+pincprange
+pincp<=0
+pincp>0&pincp<=25e3
+pincp>25e3&pincp<=50e3
+pincp>50e3&pincp<=100e3
+pincp>100e3")
+pincp_ranges
+
+vnames <- c("pincp",  "wagp", "intp", "retp") #[c(1,2,3, 4)]
+fns    <- c("sumval", "npos", "nneg")         #[c(1,2,3)]
+
+# We are setting things up to define 5 x 4 x 3 = 60 constraints, here goes:
+range_recipe <- expand_grid(vname = vnames, valgroup=pincp_ranges$pincprange, fn = fns)
+
+# range_recipe %<>%
+#   filter(!(vname == "pincp" & valgroup %in% c("pincp<=0"))) %>% 
+#   filter(!(vname == "wagp" & valgroup %in% c("pincp<=0"))) %>% 
+#   filter(!(vname == "retp" & valgroup %in% c("pincp<=0"))) %>% 
+#   filter(!(vname == "intp" & valgroup %in% c("pincp<=0"))) %>% 
+#   filter(!(vname == "intp" & fn %in% c("nneg"))) %>% # including sumval leads to failure 
+#   filter(!(vname == "retp" & fn %in% c("npos", "nneg")))     # including sumval leads to failure 
+
+range_recipe
+
+
+# now combine the two sub recipes
+recipe <- bind_rows(totals_recipe, range_recipe) %>% 
+#recipe <- totals_recipe %>% 
+  mutate(constraint_sort = row_number(),
+         constraint_name = paste(vname, str_remove_all(valgroup, " "), fn, sep="_")) %>%
+  select(constraint_sort, everything())
+  
+
+
+
+# ccoef_sparse <- recipe %>% 
+#   rowwise() %>% 
+#   do(get_ccoefs2(., acs_subset)) %>% 
+#   ungroup %>% 
+#   # ONLY AFTER all filtering is done do we assign constraint numbers, as some
+#   # may drop out if they have no nonzero coefficients %>%
+#   mutate(constraint_num = group_indices(., constraint_sort)) %>%
+#   arrange(constraint_num, row_num) %>% 
+#   select(constraint_num, everything())
+# 
+# # did any constraints drop out? yes, quite a few, 9 out of 66 dropped
+# count(ccoef_sparse, constraint_num, constraint_sort, constraint_name) 
+
+
+# Constraints with too few non-zero coefficients may lead to failure of the optimization. 
+# Possible filtering criteria:
+ # number of non-zero coef < n_sample / 1000 
+
+ccoef_sparse <- recipe %>% 
+  rowwise() %>% 
+  do(get_ccoefs2(., acs_subset)) %>% 
+  ungroup
+count(ccoef_sparse, constraint_sort, constraint_name)
+
+ccoef_lowN <- # constraints with low # of non-zero coefficients 
+  count(ccoef_sparse, constraint_sort, constraint_name) %>% 
+  filter(n <= n_sample / 1000)
+ccoef_lowN
+
+ccoef_sparse %<>% 
+  filter(!constraint_name %in% ccoef_lowN$constraint_name) %>% 
+# ONLY AFTER all filtering is done do we assign constraint numbers, as some
+  # may drop out if they have no nonzero coefficients %>%
+  mutate(constraint_num = group_indices(., constraint_sort)) %>%
+  arrange(constraint_num, row_num) %>% 
+  select(constraint_num, everything())
+
+count(ccoef_sparse, constraint_num, constraint_sort, constraint_name)
+
+
+
+```
+
+
+Note that we defined 66 constraints but only 51 of them have nonzero constraint coefficients. Some things dropped out. For example, in the sparse version there are no constraints for number of returns with negative wages because there are zero records where wages are negative. Thus, there are no possible adjustments to weights that would get us negative wages.
+
+Now that we have a recipe let's create some targets that are slightly perturbed. In an actual analysis, we would have targets that we constructed from actual data or else from forecasts.
+
+
+```{r target_single_state, echo=TRUE}
+
+target_state <- "NY"
+
+wgt_all    <- acs_subset$pwgtp %>% sum
+wgt_target <- filter(acs_subset, stabbr == target_state)$pwgtp %>% sum
+wgt_all;wgt_target
+
+wgt_factor <- wgt_all/wgt_target
+wgt_factor
+
+x0 <- rep(1, nrow(acs_subset))
+
+input_target <- list(); input_target$ccoef_sparse <- ccoef_sparse
+constraint_vals_allstates <- input_target$ccoef_sparse %>% 
+  group_by(stabbr, constraint_num) %>% 
+  summarise(constraint_val = sum(ccoef))
+constraint_vals_allstates
+
+constraint_vals_allstates <- 
+  expand.grid(stabbr = states_select, constraint_num = 1:max(ccoef_sparse$constraint_num)) %>% 
+  left_join(constraint_vals_allstates) %>% 
+  mutate(constraint_val = ifelse(is.na(constraint_val), 0, constraint_val)) %>% 
+  arrange(stabbr, constraint_num)
+
+constraint_vals_allstates
+
+target_single_state <- wgt_factor * (constraint_vals_allstates %>% filter(stabbr == target_state) %>% pull(constraint_val))
+target_single_state
+
+input_all <- list(); input_all$ccoef_sparse <- ccoef_sparse
+init_vals            <- eval_g_sparse(x0, input_all)
+
+
+# comparing target state and file value
+ccoef_sparse %>% count(constraint_num, constraint_name) %>% 
+  mutate(target_single_state = target_single_state,
+         init_val  = init_val ,
+         ratio = target_single_state / init_val )
+
+
+
+```
+
+
+## Solve using our regular objective function
+Now we can solve the problem. I did a few things to make it easy to solve. 
+
++ First, I limited the perturbation to be within +/- 5% of the true values on the file.
++ Second, I established inequality constraints below that are +/- 2% of the targets.
++ Third, I expanded the bounds on the x values to range from 0.2 to 30
++ Fourth, in the options below I switched from the default solver ma27 to a more-appropriate solver, ma57, that requires a license (which I have).
+
+Also, I adjusted the objective function scaling because this is a larger problem, but I doubt that was necessary.
+
+On my machine an optimal solution is found in less than a minute. By contrast, I have been told that the TaxData reweighting, with far fewer targets, takes many hours.
+
+```{r optimize_single_state, echo = TRUE}
+inputs_full <- list()
+inputs_full$p <- 2
+inputs_full$weight <- acs_subset$pwgtp
+inputs_full$ccoef_sparse <- ccoef_sparse
+inputs_full$jac_vector <- jac_flatten_sparse(inputs_full$ccoef_sparse)
+
+# create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
+# create vectors with constraint lower bounds and upper bounds
+# define tolerance - for simplicity, use the same for all, but that is not necessary
+tol <- .02 # 2% range
+
+clb <- target_single_state
+clb <- clb - tol * abs(clb)
+
+cub <- target_single_state
+cub <- cub + tol * abs(clb)
+
+cbind(init_val, target_single_state, clb, cub)
+
+# structure of Jaobian
+eval_jac_g_structure_sparse <- define_jac_g_structure_sparse(inputs_full$ccoef_sparse)
+
+# structure of Hessian
+eval_h_structure <- hess_structure(length(inputs_full$weight))
+
+# set arbitrary bounds for x that fall inside the solution above
+xlb <- rep(0.3,  length(inputs_full$weight))
+xub <- rep(30, length(inputs_full$weight))
+
+opts <- list("print_level" = 0,
+             "file_print_level" = 5, # integer
+             "linear_solver" = "ma27", # mumps pardiso ma27 ma57 ma77 ma86 ma97
+             "max_iter"=10000)
+
+opts$output_file <- paste0(PROJHOME, "/task2/results/prob_NY.out")
+opts$obj_scaling_factor <- 1 # default 1 
+opts$nlp_scaling_max_gradient <- 100 # default 100 -- not changing this now
+opts  
+
+eval_g_sparse(x0, inputs_full)
+
+
+result <- ipoptr(x0 = x0,
+                 lb = xlb,
+                 ub = xub,
+                 
+                 eval_f           = eval_f_xtop,          # function, arguments: x, inputs
+                 eval_grad_f      = eval_grad_f_xtop,     # function, arguments: x, inputs
+                 eval_h           = eval_h_xtop,          # function, arguments: x, inputs, (obj_factor, hessian_lambda)
+                 eval_h_structure = eval_h_structure,     # list, structure of Hessian
+                 
+                 eval_g = eval_g_sparse,                  # function, constraints LHS - a vector of values, arguments: x, inputs
+                 eval_jac_g = eval_jac_g,                 # function, extract inputs$jac_vector, arguments: x, inputs
+                 eval_jac_g_structure = eval_jac_g_structure_sparse, # list, structure of Jacobian
+                 
+                 constraint_lb = clb, 
+                 constraint_ub = cub,
+                 
+                 opts   = opts,
+                 inputs = inputs_full
+                 )
+
+#names(result) %>% sort
+result$message; result$status; result$iterations
+result$objective
+quantile(result$solution, probs = c(0, .05, .1, .25, .5, .75, .9, .95, 1))
+
+calcsums <- eval_g_sparse(x=result$solution, inputs_full)
+
+comparison <- cbind(init_val, target_single_state, calcsums, clb, cub, calcsums/target_single_state) 
+rownames(comparison) <- ccoef_sparse %>% count(constraint_num, constraint_name) %>% pull(constraint_name)
+comparison
+
+
+result_full <- result
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
