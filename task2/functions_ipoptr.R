@@ -1,7 +1,8 @@
 
 
 
-# Functions to compute constraint coefficients
+
+# Functions to compute constraint coefficients ----
 nnz  <- function(var, weight) {(var != 0) * weight} # weighted number of returns with non-zero values
 nz   <- function(var, weight) {(var != 0) * weight} # weighted number of returns with zero values
 npos <- function(var, weight) {(var >= 0) * weight} # weighted number of returns with positive values}
@@ -149,7 +150,7 @@ define_jac_g_structure_dense <- function(n_constraints, n_variables){
 }
 
 
-
+# sparse matrices ----
 
 
 make.sparse.structure <- function(ccoef) {
@@ -201,7 +202,9 @@ get_ccoefs2 <- function(recipe, data){
   # recipe as passed to this function will have only one record - 
   #  that is, it has rules for a single constraint
   # Returns a data frame containing all non-zero coefficients of the constraint
-  #data <- acssub
+  # data <- acs_subset_use
+  # recipe <- recipe[1,]
+  # data
   
   recipe <- as_tibble(recipe) # force this - otherwise passed as list
   
@@ -210,7 +213,7 @@ get_ccoefs2 <- function(recipe, data){
     mutate(row_num = row_number()) %>% 
     filter(eval(parse(text = recipe$valgroup))) %>% 
     mutate(vname = recipe$vname) %>% 
-    select(stabbr, vname, row_num, pwgtp, value = !!recipe$vname)
+    select(stabbr, vname, row_num, pwgtp, pwgtp_original, value = !!recipe$vname)
   
   ccoef <- left_join(recipe, datause, by = "vname") %>% 
     mutate(ccoef = case_when(recipe$fn == "sumval" ~ value * pwgtp,
@@ -270,7 +273,75 @@ define_jac_g_structure_sparse <- function(ccoef_sparse){
 
 
 
+## Alternative objective function ----
 
+eval_f_absapprox <- function(x, inputs) {
+  #.. objective function - evaluates to a single number ----
+  # returns a single value
+  
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
+  # here are the objective function, the 1st deriv, and the 2nd deriv
+  # http://www.derivative-calculator.net/
+  
+  # [(x-1)^2 + s^2]^{1/2}                                objective function
+  # (x - 1) / ({(x - 1)^2 + s^2}^(1/2))                  first deriv
+  # s^2 / [(x-1)^2 + s^2]^(3/2)                          second deriv
+  
+  # make it easier to read:
+  s <- inputs$s
+  
+  obj <- sum({(x-1)^2 + s^2}^(1/2))
+  
+  return(obj)
+}
+
+
+eval_grad_f_absapprox <- function(x, inputs){
+  #.. gradient of objective function - a vector length x ----
+  # giving the partial derivatives of obj wrt each x[i]
+  # returns one value per element of x
+  
+  # ipoptr requires that ALL functions receive the same arguments, so a list called inputs is passed to ALL functions
+  
+  # here are the objective function, the 1st deriv, and the 2nd deriv
+  # http://www.derivative-calculator.net/
+  # 
+  # [(x-1)^2 + s^2]^{1/2}                                objective function
+  # (x - 1) / ({(x - 1)^2 + s^2}^(1/2))                  first deriv
+  # s^2 / [(x-1)^2 + s^2]^(3/2)                          second deriv
+  
+  # make it easier to read:
+  s <- inputs$s
+  
+  gradf <- (x - 1) / ({(x - 1)^2 + s^2}^(1/2))
+  
+  return(gradf)
+}
+
+eval_h_absapprox <- function(x, obj_factor, hessian_lambda, inputs){
+  # The Hessian matrix ----
+  # The Hessian matrix has many zero elements and so we set it up as a sparse matrix
+  # We only keep the (potentially) non-zero values that run along the diagonal.
+  # the Hessian is returned as a long vector. 
+  # Separately, we define which elements of this vector correspond to which cells of the Hessian matrix.
+  
+  # obj_factor and hessian_lambda are required arguments of the function. They are created within ipoptr - we do not create them.
+  
+  # http://www.derivative-calculator.net/
+  
+  # [(x-1)^2 + s^2]^{1/2}                                objective function
+  # (x - 1) / ({(x - 1)^2 + s^2}^(1/2))                  first deriv
+  # s^2 / [(x-1)^2 + s^2]^(3/2)                          second deriv
+  
+  # make it easier to read:
+  s <- inputs$s
+  
+  hess <- obj_factor * 
+    ( s^2 / {((x-1)^2 + s^2)^(3/2)} )
+  
+  return(hess)
+}
 
 
 
