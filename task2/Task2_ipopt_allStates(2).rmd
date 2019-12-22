@@ -50,7 +50,7 @@ persons_all <- readRDS(paste0(destdir, "persons.rds"))
 glimpse(persons_all)
 ns(persons_all)
 
-states_select <- c("NY", "NY", "TX", "IL", "FL") # 5 large very different states
+states_select <- c("CA", "NY", "TX", "IL", "FL") # 5 large very different states
 n_sample      <- 50e3
 set.seed(1234)
 
@@ -135,13 +135,14 @@ summary(acs_subset)
 # Loading data
 acs_subset <- readRDS(paste0(PROJHOME, "/data/acs_subset.rds"))
 ht(acs_subset)
+str(acs_subset)
+
 
 # Set target state
-target_state <- "NY"  # "CA", "NY", "TX", "IL", "FL"
+target_state <- "All" # "NY", "CA", "NY", "TX", "IL", "FL"
 
 
 # Choose objective function
-
 obj_fn <- c("xtop", "absapprox")[2]
 
 
@@ -155,8 +156,8 @@ obj_fn <- c("xtop", "absapprox")[2]
 #             right now, the function get_ccoefs has definitions for sumval, npos, and nnegs
 #             so that's what we'll use, but we could expand it of course
 
-# Create a sub-recipe for file totals - must make sure valgroup is character 
 
+# Create a sub-recipe for file totals - must make sure valgroup is character 
 totals_recipe <- read_csv("
   vname, valgroup, fn
   weightp, TRUE, npos
@@ -170,6 +171,31 @@ totals_recipe <- read_csv("
   ssp,   TRUE, sumval
   ssp,   TRUE, npos", col_types = cols(.default=col_character()))
 totals_recipe
+
+
+# Create a sub-recipe for state totals - must make sure valgroup is character
+
+state_names     <- as.character(acs_subset$stabbr) %>% unique %>% sort
+
+stateTot_recipe <- read_csv("
+  vname, fn
+  weightp, npos
+  pincp, sumval
+  pincp, npos
+  wagp,  sumval
+  intp,  sumval
+  intp,  npos
+  retp,  sumval
+  retp,  npos
+  ssp,   sumval
+  ssp,   npos", col_types = cols(.default=col_character())) %>% 
+  mutate(c_num = row_number())
+stateTot_recipe
+
+stateTot_recipe <- expand_grid(valgroup=paste0("stabbr=='", state_names,"'") , c_num = stateTot_recipe$c_num) %>% 
+  left_join(stateTot_recipe, by = "c_num") %>% 
+  select(vname, valgroup, fn)
+stateTot_recipe
 
 
 # Create a sub-recipe for pincp ranges
@@ -193,7 +219,10 @@ vnames <- c("weightp",  "pincp",  "wagp", "intp", "retp", "ssp") #[c(1,2,3, 4)]
 fns    <- c("sumval", "npos", "nneg")         #[c(1,2,3)]
 
 # We are setting things up to define 5 x 4 x 3 = 60 constraints, here goes:
-range_recipe <- expand_grid(vname = vnames, valgroup=pincp_ranges$pincprange, fn = fns)
+range_recipe <- expand_grid(vname = vnames, 
+                            valgroup_range = pincp_ranges$pincprange, 
+                            valgroup_state = paste0("stabbr=='", state_names,"'"),
+                            fn = fns) 
 
 # Excluding some constraints
 range_recipe %<>%
@@ -206,11 +235,15 @@ range_recipe %<>%
 #   filter(!(vname == "intp" & fn %in% c("nneg"))) %>% # including sumval leads to failure 
 #   filter(!(vname == "retp" & fn %in% c("npos", "nneg")))     # including sumval leads to failure 
 
+range_recipe %<>% # combine range and state conditions
+  mutate(valgroup = paste(valgroup_range, valgroup_state, sep = "&")) %>% 
+  select(vname, valgroup, fn)
+
 range_recipe
 
 
 # now combine the two sub recipes
-recipe <- bind_rows(totals_recipe, range_recipe) %>% 
+recipe <- bind_rows(totals_recipe, stateTot_recipe, range_recipe) %>% 
 #recipe <- totals_recipe %>% 
   mutate(constraint_sort = row_number(),
          constraint_name = paste(vname, str_remove_all(valgroup, " "), fn, sep="_")) %>%
@@ -218,17 +251,29 @@ recipe <- bind_rows(totals_recipe, range_recipe) %>%
   
 recipe
 
+
+
 # Checking the number of constraints and nuber of non-zero coeffs
+
+# To solve the optimization problem for 5 states, we need to create
+# a data frame with 5 original df stacked together, each for an indiviudal state. 
+
+acs_subset_stacked <- ldply(state_names, function(x) acs_subset %>% mutate(stabbr_original = stabbr, stabbr = x))
+acs_subset_stacked %>% ht
+
+
 ccoef_sparse_test <- recipe %>% 
   rowwise() %>% 
-  do(get_ccoefs(., acs_subset)) %>% 
+  do(get_ccoefs(., acs_subset_stacked)) %>% 
   ungroup
 count(ccoef_sparse_test, constraint_sort, constraint_name)
 
 ccoef_lowN_test <- # constraints with low # of non-zero coefficients 
   count(ccoef_sparse_test, constraint_sort, constraint_name) %>% 
-  filter(n <= n_sample / 1000)
+  filter(n <=  nrow(acs_subset) / 1000)
 ccoef_lowN_test
+
+# Note that all state specific constraints on intp are removed due to low # of non-zero coefs. 
 
 ccoef_sparse_test %<>% 
   filter(!constraint_name %in% ccoef_lowN_test$constraint_name) %>% 
@@ -239,57 +284,66 @@ ccoef_sparse_test %<>%
   select(constraint_num, everything())
 
 count(ccoef_sparse_test, constraint_num, constraint_sort, constraint_name)
+
+# 285 of 375 constraints are kept (75%)
+
 ```
 
 
 ```{r}
-run_ipopt <- function(target_state,
-                      recipe,
-                      obj_fn,
-                      data = acs_subset){
+run_ipopt_allstates <- function(recipe,
+                                obj_fn,
+                                data = acs_subset){
 # Function inputs
 #  - target_state
 #  - acs_subset
 #  - recipe
 #  - obj_fn
 
-# data <- acs_subset
+data <- acs_subset
+obj_fn <- "xtop"
 
-    
 # # names(persons_all)
 # data_use[data_use$ssp >= 0, ] %>% nrow
 
+##  Preparing ACS data for optimzation problem
 
-# Preparing ACS data for optimzation problem
- # Scale down the weights in data so that the sum of weights equals the sum of 
- # weights of the target state
-
-totwgt_data  <- data$pwgtp %>% sum
-totwgt_targetState <- filter(data, stabbr == target_state)$pwgtp %>% sum
-totwgt_data; totwgt_targetState
-
-(wgt_factor <- totwgt_targetState / totwgt_data)
-
-
-data_use <- 
+# ratio of state weight sum and 'national' weight sum
+df_wgt_factor <- 
   data %>% 
+  group_by(stabbr) %>% 
+  summarise(pwgtp_stateSum = sum(pwgtp)) %>% 
+  mutate(wgt_factor = pwgtp_stateSum / sum(pwgtp_stateSum))
+
+
+# To solve the optimization problem for 5 states, we need to create
+# a data frame with 5 original df stacked together, each for an indiviudal state. 
+state_names  <- as.character(data$stabbr) %>% unique %>% sort
+
+data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
+  left_join(df_wgt_factor, by = "stabbr") %>% 
   rename(pwgtp_original = pwgtp) %>% 
   mutate(pwgtp = pwgtp_original * wgt_factor,
          weightp = pwgtp # to construct constraints on total weight
          )
 
+# check the state totals
+# data_stacked %>%
+#   group_by(stabbr) %>% 
+#   summarise(pwgtp_stateSum = sum(pwgtp))
+
 
 # Constructing constraint coefficient df from recipe
-
+cat("\nConstructing constraints...\n")
 ccoef_sparse <- recipe %>% 
   rowwise() %>% 
-  do(get_ccoefs2(., data_use)) %>% 
+  do(get_ccoefs2(., data_stacked)) %>% 
   ungroup
 # count(ccoef_sparse, constraint_sort, constraint_name)
 
 ccoef_lowN <- # constraints with low # of non-zero coefficients 
   count(ccoef_sparse, constraint_sort, constraint_name) %>% 
-  filter(n <= n_sample / 1000)
+  filter(n <= nrow(data) / 1000)
 # ccoef_lowN
 
 ccoef_sparse %<>% 
@@ -302,68 +356,60 @@ ccoef_sparse %<>%
 # count(ccoef_sparse, constraint_num, constraint_sort, constraint_name)
 
 
+ccoef_sparse_tgt <- recipe %>% 
+  rowwise() %>% 
+  do(get_ccoefs2(., data %>% mutate(pwgtp_original = pwgtp))) %>% 
+  ungroup %>% 
+  filter(constraint_sort %in% unique(ccoef_sparse$constraint_sort)) %>% 
+  arrange(constraint_sort) %>%
+  mutate(constraint_num = group_indices(., constraint_sort)) %>% 
+  arrange(constraint_num, row_num) %>% 
+  select(constraint_num, everything())
+# ccoef_sparse_tgt %>% ht
 
-# Note that we defined x constraints but only y of them have nonzero constraint coefficients. Some things dropped out. For example, in the sparse   version there are no constraints for number of returns with negative wages because there are zero records where wages are negative. Thus, there are no possible adjustments to weights that would get us negative wages.
 
-# Now that we have a recipe let's create some targets that are slightly perturbed. In an actual analysis, we would have targets that we constructed from actual data or else from forecasts.
+input_tgt <- list(); input_tgt$ccoef_sparse <- ccoef_sparse_tgt
+target_vals <- eval_g_sparse(rep(1, nrow(data)), input_tgt)
+target_vals
 
-
-
-# Defining constraint targets 
-
-x0 <- rep(1, nrow(data_use))
-
-input_target <- list(); input_target$ccoef_sparse <- ccoef_sparse
-constraint_vals_allstates <- input_target$ccoef_sparse %>% 
-  group_by(stabbr, constraint_num) %>% 
-  summarise(constraint_val = sum(ccoef / wgt_factor)) # need to use the orginal weight
-# constraint_vals_allstates
-
-constraint_vals_allstates <- 
-  expand.grid(stabbr = states_select, constraint_num = 1:max(ccoef_sparse$constraint_num)) %>% 
-  left_join(constraint_vals_allstates) %>% 
-  mutate(constraint_val = ifelse(is.na(constraint_val), 0, constraint_val)) %>% 
-  arrange(stabbr, constraint_num)
-
-# constraint_vals_allstates
-
-target_single_state <- (constraint_vals_allstates %>% filter(stabbr == target_state) %>% pull(constraint_val))
-# target_single_state
-# fo
-input_all <- list(); input_all$ccoef_sparse <- ccoef_sparse
-init_vals            <- eval_g_sparse(x0, input_all)
-
+# for comparison
+input_init <- list(); input_init$ccoef_sparse <- ccoef_sparse
+init_vals <- eval_g_sparse(rep(1, nrow(data_stacked)), input_init)
 
 # comparing target state and file value
-# ccoef_sparse %>% count(constraint_num, constraint_name) %>% 
-#   mutate(target_single_state = target_single_state,
+# ccoef_sparse %>% count(constraint_num, constraint_name) %>%
+#   mutate(targets = targets_vals,
 #          init_vals  = init_vals ,
-#          ratio = target_single_state / init_vals)
+#          ratio = targets / init_vals)
+
+
+
 
 
 
 # Inputs for the function
 
+x0 <- rep(1, nrow(data_stacked))
+
 inputs_full <- list()
 inputs_full$p <- 2
 inputs_full$s      <- 0.01
-inputs_full$weight <- data_use$pwgtp
+inputs_full$weight <- data_stacked$pwgtp
 inputs_full$ccoef_sparse <- ccoef_sparse
 inputs_full$jac_vector <- jac_flatten_sparse(inputs_full$ccoef_sparse)
 
-inputs_full$target_state <- target_state
-inputs_full$wgt_factor   <- wgt_factor
-inputs_full$target_single_state <- target_single_state
+inputs_full$target_vals <- target_vals
+inputs_full$wgt_factor   <- df_wgt_factor
 
 # create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
 # create vectors with constraint lower bounds and upper bounds
 # define tolerance - for simplicity, use the same for all, but that is not necessary
 tol <- .01 # 2% range
 
-clb <- target_single_state
+clb <- target_vals
 clb <- clb - tol * abs(clb)
 
-cub <- target_single_state
+cub <- target_vals
 cub <- cub + tol * abs(clb)
 #cbind(init_vals, target_single_state, clb, cub)
 
@@ -382,7 +428,7 @@ opts <- list("print_level" = 0,
              "linear_solver" = "ma27", # mumps pardiso ma27 ma57 ma77 ma86 ma97
              "max_iter"=1000)
 
-opts$output_file <- paste0(PROJHOME, "/task2/results/prob_NY.out")
+opts$output_file <- paste0(PROJHOME, "/task2/results/prob_5states.out")
 opts$obj_scaling_factor <- 1 # default 1 
 opts$nlp_scaling_max_gradient <- 100 # default 100 -- not changing this now
 #opts  
@@ -405,7 +451,7 @@ if(obj_fn == "absapprox"){
 }
 
 
-
+cat("\nSolving the optimization problem...\n")
 result <- ipoptr(x0 = x0,
                  lb = xlb,
                  ub = xub,
@@ -438,9 +484,9 @@ result <- ipoptr(x0 = x0,
  # names(output$result) %>% sort
 
  calcsums <- eval_g_sparse(x=result$solution, inputs_full)
- comparison <- cbind(init_vals, target_single_state, calcsums, calcsums/target_single_state)
+ comparison <- cbind(init_vals, target_vals, calcsums, calcsums/target_vals)
  rownames(comparison) <- ccoef_sparse %>% count(constraint_num, constraint_name) %>% pull(constraint_name)
- # comparison
+ # comparison 
  
  outputs <- list()
  outputs$inputs <- inputs_full
@@ -452,18 +498,19 @@ result <- ipoptr(x0 = x0,
 }
 
 
-output <- run_ipopt("NY", recipe, "xtop")
+# output <- run_ipopt("NY", recipe, "xtop")
+
+
+system.time({output <- run_ipopt_allstates(recipe, "xtop")})
+# Takes about 130s 
+# Memory usage is  (2.5Gb used by R and RStudio), potential for much larger problems (more states)
 
 # output$result$message; output$result$status; output$result$iterations
 # output$result$objective
 # quantile(output$result$solution, probs = c(0, .05, .1, .25, .5, .75, .9, .95, 1))
 # result_single_state <- result
   
-
-
 ```
-
-
 
 
 # Comparing the re-weighted data with the true single state data
@@ -475,106 +522,151 @@ output <- run_ipopt("NY", recipe, "xtop")
 ```{r compare percentiles}
 # Examine distributions of individual variables 
 
+
 compare_ptiles <- function(var_,
-                           target_state_,
-                           datause_,
-                           result_,
+                           state_select,
+                           data,
+                           result,
                            pts = c(0, .05, .1, .25, .5, .75, .9, .95,.99, 1)
                            ){
 
-# var_     <- "pincp"
-# datause_ <- acs_subset_use
-# result_  <- result_single_state
-# target_state_ <- "NY"
-# pts <- c(0, .05, .1, .25, .5, .75, .9, .95, 1)
+# var_ <- "retp"
+# data <-  acs_subset
+# result <- output$result
+# state_select <- "All"
+# pts = c(0, .05, .1, .25, .5, .75, .9, .95,.99, 1)
 
-datause_ %<>% 
-  mutate(x = result_$solution,
-         pwgtp_rewgt = pwgtp * x 
-         )
+if (state_select == "All"){
+  target_state <- as.character(data$stabbr) %>% unique
+  } else target_state <- state_select
 
-data_single_state <- 
-  datause_ %>% 
-  filter(stabbr == target_state_)
+state_names <- as.character(acs_subset$stabbr) %>% unique %>% sort
+data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
+  left_join(mutate(output$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+  mutate(pwgtp = pwgtp * wgt_factor, 
+         x = result$solution,
+         pwgtp_rewgt = pwgtp * x) %>% 
+  filter(stabbr %in% target_state) 
+
+data_select <- 
+  data %>% filter(stabbr %in% target_state)
 
 comparison <- 
   bind_rows(
-    Hmisc::wtd.quantile(datause_[[var_]], datause_$pwgtp, pts),                                      # w/ original weight
-    Hmisc::wtd.quantile(data_single_state[[var_]], data_single_state$pwgtp_original, pts), # target
-    Hmisc::wtd.quantile(datause_[[var_]], datause_$pwgtp_rewgt, pts)                       # reweighted
-) %>% 
-  mutate(var  = var_, 
-         type = c("org", paste0("tgt_", target_state_) , paste0("rwt_", target_state_))) %>% 
-  select(var, type, everything())
+    Hmisc::wtd.quantile(data_stacked[[var_]], data_stacked$pwgtp, pts),                                      # w/ original weight
+    Hmisc::wtd.quantile(data_select[[var_]],  data_select$pwgtp, pts), # target
+    Hmisc::wtd.quantile(data_stacked[[var_]], data_stacked$pwgtp_rewgt, pts)                       # reweighted
+)
 
 return(comparison)
 }
 
 
-compare_ptiles("pincp", target_state, acs_subset_use, result_single_state)
-compare_ptiles("wagp",  target_state, acs_subset_use, result_single_state)
-compare_ptiles("intp",  target_state, acs_subset_use, result_single_state)
-compare_ptiles("retp",  target_state, acs_subset_use, result_single_state)
-compare_ptiles("ssp",   target_state, acs_subset_use, result_single_state)
+
+
+compare_ptiles("pincp", "All", acs_subset, output$result)
+compare_ptiles("wagp",  "All", acs_subset, output$result)
+compare_ptiles("intp",  "All", acs_subset, output$result)
+compare_ptiles("retp",  "All", acs_subset, output$result)
+compare_ptiles("ssp",   "All", acs_subset, output$result)
 
 # Not constrained
-compare_ptiles("pap",   target_state, acs_subset_use, result_single_state) # close to the original, does not fit well
-compare_ptiles("ssip",  target_state, acs_subset_use, result_single_state) # close to the original, does not fit well
+compare_ptiles("pap",   "All", acs_subset, output$result)
+compare_ptiles("ssip",   "All", acs_subset, output$result)
+
+
+
 ```
 
 
 ```{r compare_ecdf}
+
 compare_ecdf <- function(var_,
-                         target_state_,
-                         datause_,
-                         result_,
+                         state_select,
+                         data,
+                         result,
                          cutoff = 0.95){
-  
-# var_     <- "pap"
-# datause_ <- acs_subset_use
-# result_  <- result_single_state
-# target_state_ <- "NY"
+
+
+# var_ <- "retp"
+# data <-  acs_subset
+# result <- output$result 
+# state_select <- "All"
 # cutoff <- 0.95
 
-datause_ %<>% 
-  mutate(x = result_$solution,
-         pwgtp_rewgt = pwgtp * x 
-         )
+if (state_select == "All"){
+  target_state <- as.character(data$stabbr) %>% unique
+  } else target_state <- state_select
 
-data_single_state <- 
-  datause_ %>% 
-  filter(stabbr == target_state_)
-    
-ecdf_org <- Hmisc::wtd.Ecdf(datause_[[var_]], datause_$pwgtp)
-ecdf_tgt <- Hmisc::wtd.Ecdf(data_single_state[[var_]], data_single_state$pwgtp_original)
-ecdf_rwt <- Hmisc::wtd.Ecdf(datause_[[var_]], datause_$pwgtp_rewgt)
+state_names <- as.character(acs_subset$stabbr) %>% unique %>% sort
+data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
+  left_join(mutate(output$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+  mutate(pwgtp = pwgtp * wgt_factor, 
+         x = result$solution,
+         pwgtp_rewgt = pwgtp * x) %>% 
+  filter(stabbr %in% target_state) 
 
 
+
+data_select <- 
+  data %>% filter(stabbr %in% target_state)
+
+ ecdf_org <- Hmisc::wtd.Ecdf(data_stacked[[var_]], data_stacked$pwgtp)                                      # w/ original weight
+ ecdf_tgt <- Hmisc::wtd.Ecdf(data_select[[var_]],  data_select$pwgtp) # target
+ ecdf_rwt <- Hmisc::wtd.Ecdf(data_stacked[[var_]], data_stacked$pwgtp_rewgt)
+                             
 bind_rows(
  as_tibble(ecdf_org) %>% mutate(type = "org"),
- as_tibble(ecdf_tgt) %>% mutate(type = paste0("tgt_", target_state_)),
- as_tibble(ecdf_rwt) %>% mutate(type = paste0("rwt_", target_state_))
+ as_tibble(ecdf_tgt) %>% mutate(type = paste0("tgt_", state_select)),
+ as_tibble(ecdf_rwt) %>% mutate(type = paste0("rwt_", state_select))
 ) %>% 
-  mutate(type = factor(type, levels = c("org", paste0("tgt_", target_state_), paste0("rwt_", target_state_)))) %>% 
+  mutate(type = factor(type, levels = c("org", paste0("tgt_", state_select), paste0("rwt_", state_select)))) %>% 
   filter(ecdf <= cutoff) %>% 
   ggplot(aes(x = x, y = ecdf, color = type)) + theme_bw() + 
   geom_line() +
   coord_cartesian(ylim = c(0,1))+
   scale_color_manual(values = c("grey40", "red", "blue"))+
   labs(x = NULL,
-       title = paste0("Comparing ECDF \nTarget state: ", target_state_, "\nVariable: ", var_))
+       title = paste0("Comparing ECDF \nTarget state: ", state_select, "\nVariable: ", var_))
+ 
 }
 
-compare_ecdf("pincp", target_state, acs_subset_use, result_single_state)
-compare_ecdf("wagp", target_state, acs_subset_use, result_single_state)
-compare_ecdf("intp", target_state, acs_subset_use, result_single_state)
-compare_ecdf("retp", target_state, acs_subset_use, result_single_state)
-compare_ecdf("ssp", target_state, acs_subset_use, result_single_state)
 
-# Not constrained 
-compare_ecdf("pap",  target_state, acs_subset_use, result_single_state, 1)
-compare_ecdf("ssip", target_state, acs_subset_use, result_single_state, 1)
+compare_ecdf("pincp", "All", acs_subset, output$result)
+compare_ecdf("wagp",  "All", acs_subset, output$result)
+compare_ecdf("intp",  "All", acs_subset, output$result)
+compare_ecdf("retp",  "All", acs_subset, output$result)
+compare_ecdf("ssp",   "All", acs_subset, output$result)
 
+compare_ecdf("pincp", "NY", acs_subset, output$result)
+compare_ecdf("wagp",  "NY", acs_subset, output$result)
+compare_ecdf("intp",  "NY", acs_subset, output$result)
+compare_ecdf("retp",  "NY", acs_subset, output$result)
+compare_ecdf("ssp",   "NY", acs_subset, output$result)
+
+compare_ecdf("pincp", "CA", acs_subset, output$result)
+compare_ecdf("wagp",  "CA", acs_subset, output$result)
+compare_ecdf("intp",  "CA", acs_subset, output$result)
+compare_ecdf("retp",  "CA", acs_subset, output$result)
+compare_ecdf("ssp",   "CA", acs_subset, output$result)
+
+compare_ecdf("pincp", "TX", acs_subset, output$result)
+compare_ecdf("wagp",  "TX", acs_subset, output$result)
+compare_ecdf("intp",  "TX", acs_subset, output$result)
+compare_ecdf("retp",  "TX", acs_subset, output$result)
+compare_ecdf("ssp",   "TX", acs_subset, output$result)
+
+compare_ecdf("pincp", "IL", acs_subset, output$result)
+compare_ecdf("wagp",  "IL", acs_subset, output$result)
+compare_ecdf("intp",  "IL", acs_subset, output$result)
+compare_ecdf("retp",  "IL", acs_subset, output$result)
+compare_ecdf("ssp",   "IL", acs_subset, output$result)
+
+compare_ecdf("pincp", "FL", acs_subset, output$result)
+compare_ecdf("wagp",  "FL", acs_subset, output$result)
+compare_ecdf("intp",  "FL", acs_subset, output$result)
+compare_ecdf("retp",  "FL", acs_subset, output$result)
+compare_ecdf("ssp",   "FL", acs_subset, output$result)
 
 
 # Note
