@@ -1,0 +1,59 @@
+This is Ipopt version 3.12, running with linear solver ma27.
+
+Number of nonzeros in equality constraint Jacobian...:        0
+Number of nonzeros in inequality constraint Jacobian.:    76633
+Number of nonzeros in Lagrangian Hessian.............:    20000
+
+Total number of variables............................:    20000
+                     variables with only lower bounds:        0
+                variables with lower and upper bounds:    20000
+                     variables with only upper bounds:        0
+Total number of equality constraints.................:        1
+Total number of inequality constraints...............:        6
+        inequality constraints with only lower bounds:        0
+   inequality constraints with lower and upper bounds:        6
+        inequality constraints with only upper bounds:        0
+
+iter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls
+   0 0.0000000e+000 1.47e+009 0.00e+000  -1.0 0.00e+000    -  0.00e+000 0.00e+000   0
+   1 1.1743027e+004 1.43e+009 9.95e+000  -1.0 1.56e+003    -  5.24e-003 2.58e-002h  1
+   2 4.4929023e+005 1.20e+009 2.91e+001  -1.0 1.31e+002    -  2.86e-002 1.61e-001h  1
+   3 3.0918180e+006 7.30e+008 1.40e+001  -1.0 9.08e+001    -  9.01e-002 3.89e-001h  1
+   4 4.6816726e+006 5.55e+008 1.11e+001  -1.0 7.81e+001    -  2.42e-001 2.37e-001h  1
+   5 8.4770868e+006 2.29e+008 6.11e+000  -1.0 6.13e+001    -  3.27e-001 5.70e-001h  1
+   6 1.2017844e+007 2.07e+005 5.68e+000  -1.0 6.39e+002    -  3.51e-002 9.88e-001h  1
+   7 1.2056272e+007 2.89e+001 2.84e-001  -1.0 7.81e+000    -  9.82e-001 8.09e-001h  1
+   8 1.2066428e+007 0.00e+000 9.76e-003  -1.0 1.45e+001    -  9.93e-001 1.00e+000h  1
+   9 1.2061559e+007 0.00e+000 2.01e+000  -1.7 1.33e+001    -  6.77e-001 1.00e+000f  1
+iter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls
+  10 1.2061301e+007 0.00e+000 7.06e-003  -1.7 6.23e+000    -  1.00e+000 1.00e+000f  1
+  11 1.2060959e+007 0.00e+000 2.37e-001  -3.8 5.87e+000    -  8.71e-001 1.00e+000f  1
+  12 1.2060955e+007 0.00e+000 7.01e-003  -3.8 3.73e-001    -  1.00e+000 1.00e+000f  1
+  13 1.2060954e+007 0.00e+000 2.00e-003  -3.8 3.29e-002    -  1.00e+000 1.00e+000f  1
+  14 1.2060954e+007 0.00e+000 2.45e-004  -3.8 7.69e-003    -  1.00e+000 1.00e+000f  1
+  15 1.2060954e+007 0.00e+000 1.43e-004  -5.7 5.30e-002    -  1.00e+000 1.00e+000f  1
+  16 1.2060954e+007 0.00e+000 4.12e-006  -5.7 5.72e-004    -  1.00e+000 1.00e+000f  1
+  17 1.2060954e+007 0.00e+000 5.09e-008  -8.6 6.71e-004    -  1.00e+000 1.00e+000f  1
+  18 1.2060954e+007 0.00e+000 5.86e-013  -8.6 1.50e-007    -  1.00e+000 1.00e+000h  1
+
+Number of Iterations....: 18
+
+                                   (scaled)                 (unscaled)
+Objective...............:  1.2060953712130625e+005   1.2060953712130625e+007
+Dual infeasibility......:  5.8616475343777950e-013   5.8616475343777957e-011
+Constraint violation....:  0.0000000000000000e+000   0.0000000000000000e+000
+Complementarity.........:  2.5451666360402336e-009   2.5451666360402337e-007
+Overall NLP error.......:  2.5451666360402336e-009   2.5451666360402337e-007
+
+
+Number of objective function evaluations             = 19
+Number of objective gradient evaluations             = 19
+Number of equality constraint evaluations            = 19
+Number of inequality constraint evaluations          = 19
+Number of equality constraint Jacobian evaluations   = 19
+Number of inequality constraint Jacobian evaluations = 19
+Number of Lagrangian Hessian evaluations             = 18
+Total CPU secs in IPOPT (w/o function evaluations)   =      0.560
+Total CPU secs in NLP function evaluations           =      0.606
+
+EXIT: Optimal Solution Found.

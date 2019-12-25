@@ -20,3 +20,4 @@ library("knitr")
 library("kableExtra")
 
 library("DBI")
+library("nnet")

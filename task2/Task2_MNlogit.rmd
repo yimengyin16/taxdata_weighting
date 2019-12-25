@@ -1,0 +1,179 @@
+---
+title: "State TaxData Enhancement Project -- Task 2"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+
+# Start of the program
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/Data/acs/"
+
+#dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
+#dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("task2", "libraries_djb.r"))
+source(here::here("task2", "functions_djb.r"))
+source(here::here("task2", "functions_optimization_djb.r"))
+source(here::here("task2", "functions_ipoptr.R"))
+```
+
+
+# Setting target state and preparing recipe for constraint coefficients
+
+```{r}
+# Loading data
+acs_subset <- readRDS(paste0(PROJHOME, "/data/acs_subset.rds"))
+ht(acs_subset)
+str(acs_subset)
+
+# Set target state
+target_state <- "All"   # "NY", "CA", "NY", "TX", "IL", "FL"
+
+```
+
+
+```{r}
+
+# multinom_nnet <- function(objfn, wts0, sampdata, consdata, niter=1000){
+#   # we don't need most of the input arguments I include them for a quick and dirty function
+  
+  # mnldata <- samp_clean %>% 
+  #   mutate(stabbr=as.character(stabbr),  # character to remove levels of states not in sample
+  #          sex=as.factor(sex), agep=as.factor(agep), mar=as.factor(mar)) %>% # just to be sure these are treated as factors
+  #   mutate_at(vars(pincp, wagp, intp, retp, ssip, ssp), list(~ (. - min(.)) / (max(.) - min(.)))) # scale continuous vars to [0, 1]
+  # 
+  # # the better the model, using all data we have available in our state-labeled data that are also in our
+  # # sample data, the better the predictions will be
+  # 
+  # frm <- stabbr ~ pincp + wagp + intp + retp + ssip + ssp +
+  #   sex + agep + mar + mar*agep + sex*agep
+  # 
+  # mnl <- multinom(frm,
+  #                 data=mnldata,
+  #                 model=FALSE, # return the model that is estimated?
+  #                 MaxNWts=3000,
+  #                 maxit=niter)
+  # return(mnl)
+# }
+
+
+acs_subset_mnl <-   
+  acs_subset %>% 
+  mutate(stabbr=as.character(stabbr),  # character to remove levels of states not in sample
+           sex=as.factor(sex), agep=as.factor(agep), mar=as.factor(mar)) %>% # just to be sure these are treated as factors
+  mutate_at(vars(pincp, wagp, intp, retp, ssip, ssp), list(~ (. - min(.)) / (max(.) - min(.))))
+
+acs_subset_mnl
+
+frm <- stabbr ~ pincp + wagp + intp + retp + ssip + ssp +
+    sex + agep + mar + mar*agep + sex*agep
+
+mnl <- multinom(frm,
+                data=acs_subset_mnl,
+                model=FALSE, # return the model that is estimated?
+                MaxNWts=3000,
+                maxit=1000)
+
+
+summary(mnl)  
+
+mnl$AIC
+  
+mnl %>% names
+mnl$fitted.values
+cbind(mnl$fitted.values, rowSums(mnl$fitted.values))
+  
+
+
+
+
+df_wgt_mnl <- mnl$fitted.values %>% as_tibble()
+
+df <- bind_cols(acs_subset, df_wgt_mnl) %>% 
+  mutate(st_max = max(CA, FL,IL, NY, TX))
+
+df %>% filter(stabbr == "FL") %>% 
+  select(!!state_names ) %>% 
+  summary
+
+df %>% filter(stabbr == "CA") %>% 
+  select(!!state_names ) %>% 
+  summary
+
+
+df %>% 
+  select(stabbr, CA, FL, IL, NY, TX) %>% 
+  group_by(stabbr) %>% 
+  summarise_at(vars(CA, FL, IL, NY, TX), .funs = list(mean =  ~mean(.),
+                                                      median = ~median(.))
+               )
+
+df %>% 
+  select(stabbr,pwgtp) %>% 
+  group_by(stabbr) %>% 
+  summarise(st_wgt = sum(pwgtp),
+            st_n   = n( )) %>% 
+  mutate(st_wgt_share = st_wgt / sum(st_wgt),
+         st_n_share   = st_n / sum(st_n))
+
+
+
+
+data <- acs_subset
+
+
+df_wgt_factor <- 
+  data %>% 
+  group_by(stabbr) %>% 
+  summarise(pwgtp_stateSum = sum(pwgtp)) %>% 
+  mutate(wgt_factor = pwgtp_stateSum / sum(pwgtp_stateSum))
+df_wgt_factor
+
+df_wgt_factor
+state_names <- as.character(data$stabbr) %>% unique %>% sort
+data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
+  left_join(mutate(output$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+  mutate(pwgtp = pwgtp * wgt_factor, 
+         x = result$solution,
+         pwgtp_rewgt = pwgtp * x) %>% 
+  filter(stabbr %in% target_state) 
+
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+

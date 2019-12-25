@@ -267,7 +267,8 @@ define_jac_g_structure_sparse <- function(ccoef_sparse){
   
   jac_j_structure <- plyr::llply(unique(ccoef_sparse$constraint_num),
                                  f,
-                                 ccoef_sparse = ccoef_sparse)
+                                 ccoef_sparse = ccoef_sparse,
+                                 .progress = "text")
   return(jac_j_structure)
 }
 
