@@ -1,0 +1,409 @@
+---
+title: "State TaxData Enhancement Project -- Task 2"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+
+# Start of the program
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/Data/acs/"
+
+#dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
+#dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("task2", "libraries_djb.r"))
+source(here::here("task2", "functions_djb.r"))
+source(here::here("task2", "functions_optimization_djb.r"))
+source(here::here("task2", "functions_ipoptr.R"))
+```
+
+
+# Setting target state and preparing recipe for constraint coefficients
+
+```{r}
+# Loading data
+acs_subset_50k <- readRDS(paste0(PROJHOME, "/data/acs_subset.rds"))
+ht(acs_subset_50k)
+str(acs_subset_50k)
+
+acs_subset_10k <- readRDS(paste0(PROJHOME, "/data/acs_subset_10k.rds"))
+
+# Set target state
+target_state <- "All"   # "NY", "CA", "NY", "TX", "IL", "FL"
+
+```
+
+
+```{r}
+
+# multinom_nnet <- function(objfn, wts0, sampdata, consdata, niter=1000){
+#   # we don't need most of the input arguments I include them for a quick and dirty function
+  
+  # mnldata <- samp_clean %>% 
+  #   mutate(stabbr=as.character(stabbr),  # character to remove levels of states not in sample
+  #          sex=as.factor(sex), agep=as.factor(agep), mar=as.factor(mar)) %>% # just to be sure these are treated as factors
+  #   mutate_at(vars(pincp, wagp, intp, retp, ssip, ssp), list(~ (. - min(.)) / (max(.) - min(.)))) # scale continuous vars to [0, 1]
+  # 
+  # # the better the model, using all data we have available in our state-labeled data that are also in our
+  # # sample data, the better the predictions will be
+  # 
+  # frm <- stabbr ~ pincp + wagp + intp + retp + ssip + ssp +
+  #   sex + agep + mar + mar*agep + sex*agep
+  # 
+  # mnl <- multinom(frm,
+  #                 data=mnldata,
+  #                 model=FALSE, # return the model that is estimated?
+  #                 MaxNWts=3000,
+  #                 maxit=niter)
+  # return(mnl)
+# }
+
+
+acs_subset_mnl_50k <-   
+  acs_subset_50k %>% 
+  mutate(stabbr=as.character(stabbr),  # character to remove levels of states not in sample
+         sex=as.factor(sex), agep=as.factor(agep), mar=as.factor(mar)) %>% # just to be sure these are treated as factors
+  mutate_at(vars(pincp, wagp, intp, retp, ssip, ssp), list(~ (. - min(.)) / (max(.) - min(.))))
+
+acs_subset_mnl_10k <-   
+  acs_subset_10k %>% 
+  mutate(stabbr=as.character(stabbr),  # character to remove levels of states not in sample
+         sex=as.factor(sex), agep=as.factor(agep), mar=as.factor(mar)) %>% # just to be sure these are treated as factors
+  mutate_at(vars(pincp, wagp, intp, retp, ssip, ssp), list(~ (. - min(.)) / (max(.) - min(.))))
+
+
+
+frm <- stabbr ~ pincp + wagp + intp + retp + ssip + ssp + pap + 
+                sex + agep + mar + 
+                mar:agep + sex:agep + 
+                # pincp:(wagp + intp + retp + ssip + ssp + pap + sex + mar + agep)   # significant improvement
+                # I(pincp^2) + I(wagp^2) + I(retp^2)                                 # slight improvement
+                # intp:(wagp + retp + ssip + ssp + pap + sex + mar + agep)           # significant improvement
+                # wagp:(retp + ssip + ssp + pap + sex + mar + agep)                  # slightly less significant than pincp and intp
+                # retp:(ssip + ssp + pap + sex + mar + agep)                         # slightly less significant than wagp
+                # pap:(ssip + ssp + sex + mar + agep)                                # similar to retp, helpful for NY
+                # ssp:(ssip + sex + mar + agep)                                      # similar to retp, helpful for FL
+                # ssip:(sex + mar + agep)                                            # similar to retp
+                # ssip:(mar + agep) # w/o sex                                        # similar to above
+                # ssip:(sex + agep)   # w/o mar                                      # similar to above
+                # ssip:(sex + mar)  # w/0 agp                                        # similar to original, agep is key!
+                # intp:(pincp + wagp + retp + ssip + ssp + pap + agep + mar)         # intp:mar is important
+                
+
+                intp:(pincp + wagp + retp + ssip + ssp + pap + agep + mar + sex) +   
+                pap:(ssip + ssp) +                                                   #
+                ssp:(ssip) +                                                         # 
+                mar:(pincp + wagp + retp + pap + ssp + ssip) + 
+                sex:(pincp + wagp + retp + pap + ssp + ssip) +                       # 
+                I(pincp^2) + I(wagp^2) + I(retp^2) +  
+                I(pincp^3) + I(wagp^3) + I(retp^3)                                   # Use as new base
+                
+
+
+run_mnl <- function(frm, data){
+  frm <- frm
+data <- acs_subset_10k
+
+data_mnl <-   
+  data %>% 
+  mutate(stabbr=as.character(stabbr),  # character to remove levels of states not in sample
+         sex=as.factor(sex), agep=as.factor(agep), mar=as.factor(mar)) %>% # just to be sure these are treated as factors
+  mutate_at(vars(pincp, wagp, intp, retp, ssip, ssp), list(~ (. - min(.)) / (max(.) - min(.))))
+
+
+mnl <- multinom(frm,
+                data=data_mnl,
+                model=FALSE, # return the model that is estimated?
+                MaxNWts=3000,
+                maxit=1000)
+
+outputs <- list()
+outputs$frm <- frm
+outputs$mnl_fitted.values <- mnl$fitted.values
+  
+  
+}
+
+
+
+
+
+
+  
+mnl_50k <- multinom(frm,
+                data=acs_subset_mnl_50k,
+                model=FALSE, # return the model that is estimated?
+                MaxNWts=3000,
+                maxit=1000)
+acs_subset     <- acs_subset_50k
+mnl            <- mnl_50k
+
+mnl_10k <- multinom(frm,
+                data=acs_subset_mnl_10k,
+                model=FALSE, # return the model that is estimated?
+                MaxNWts=3000,
+                maxit=1000)
+
+
+acs_subset     <- acs_subset_10k
+mnl            <- mnl_10k
+get_mnlMeanShare(mnl_10k$fitted.values, acs_subset_10k)
+
+
+acs_subset     <- acs_subset_50k
+mnl            <- mnl_50k
+get_mnlMeanShare(mnl_50k$fitted.values, acs_subset_50k)
+
+
+mnl$coefnames
+# mnl %>% names
+# mnl$fitted.values
+# cbind(mnl$fitted.values, rowSums(mnl$fitted.values))
+  
+get_mnlMeanShare <- function(mnl_fitted.values, data){
+  # Function to calculate mean fitted shares from MN logit model by actual state label 
+
+  #mnl_fitted.values <- mnl$fitted.values
+  #data              <- acs_subset
+
+state_names <- as.character(data$stabbr) %>% unique %>% sort
+# state_names
+
+df <- bind_cols(data, as_tibble(mnl_fitted.values)) %>% 
+  mutate(st_max = max(!!state_names))
+
+df_byState <- 
+  df %>% 
+  select(stabbr, !!state_names) %>% 
+  group_by(stabbr) %>% 
+  summarise_at(vars(!!state_names), .funs = list(mean =  ~mean(.))
+               )
+df_byState
+
+df_share <- 
+  df%>% 
+  select(stabbr,pwgtp) %>% 
+  group_by(stabbr) %>% 
+  summarise(st_wgt = sum(pwgtp),
+            st_n   = n( )) %>% 
+  mutate(st_wgt_share = st_wgt / sum(st_wgt),
+         st_n_share   = st_n / sum(st_n))
+
+df_byState_diff <- df_byState
+df_byState_diff[,-1]  <- apply(df_byState[,-1], 1, function(x) x - df_share$st_n_share) 
+names(df_byState_diff)[-1] <- paste0(names(df_byState_diff)[-1], "_diff")
+
+select(df_share, stabbr, st_n_share) %>% 
+  left_join(df_byState, by = "stabbr") %>% 
+  left_join(df_byState_diff, by = "stabbr")
+}
+
+get_mnlMeanShare(mnl_10k$fitted.values, acs_subset_10k)
+get_mnlMeanShare(mnl_50k$fitted.values, acs_subset_50k)
+
+
+compare_ptiles_mnl <- function(var_, 
+                               state_select,
+                               mnl_fitted.values,
+                               data = acs_subset,
+                               pts = c(0, .05, .1, .25, .5, .75, .9, .95,.99, 1)){
+
+# function to calculate percentiles of variables reweighted by MN logit approach
+  
+  # state_select <-  "All"
+  # var_ <- "pincp"
+  # mnl_fitted.values <- mnl$fitted.values
+  # data              <- acs_subset
+  # pts <- c(0, .05, .1, .25, .5, .75, .9, .95,.99, 1)
+  
+
+  if (state_select == "All"){
+  target_state <- as.character(data$stabbr) %>% unique
+  } else target_state <- state_select
+  
+  state_names <- as.character(data$stabbr) %>% unique %>% sort
+    
+  data %<>% 
+    mutate(row_num = row_number())
+  
+  # df_wgt_factor <- 
+  #   df %>% 
+  #   group_by(stabbr) %>% 
+  #   summarise(pwgtp_stateSum = sum(pwgtp)) %>% 
+  #   mutate(wgt_factor = pwgtp_stateSum / sum(pwgtp_stateSum))
+  # df_wgt_factor
+  
+  df_mnlShare <- 
+  mnl_fitted.values %>% as_tibble() %>% 
+    mutate(row_num = row_number()) %>% 
+    gather(stabbr, wgt_mnlShare, -row_num) %>% 
+    arrange(stabbr, row_num)
+  
+  data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
+    left_join(mutate(df_wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+    left_join(df_mnlShare, by = c("stabbr", "row_num")) %>% 
+    mutate(# pwgtp = pwgtp * wgt_factor, 
+           pwgtp_rewgt = pwgtp * wgt_mnlShare) # %>% 
+  # filter(stabbr %in% target_state) 
+  # data_stacked
+  
+  data_stacked_select <- data_stacked %>% filter(stabbr %in% target_state)
+  data_select         <- data %>% filter(stabbr %in% target_state)
+  
+  comparison <-
+    bind_rows(
+      Hmisc::wtd.quantile(data_stacked_select[[var_]], data_stacked_select$pwgtp, pts),  # w/ originalweight
+      Hmisc::wtd.quantile(data_select[[var_]],         data_select$pwgtp, pts),          # target
+      Hmisc::wtd.quantile(data_stacked_select[[var_]], data_stacked_select$pwgtp_rewgt, pts)                       # reweighted
+  ) %>% 
+    mutate(var = var_,
+           type = c("org", paste0("tgt_", state_select), paste0("rwt_", state_select))) %>% 
+    select(var, type, everything())
+
+  
+  return(comparison)
+
+}
+
+
+st <- "NY"
+compare_ptiles_mnl("pincp", st, mnl$fitted.values)
+compare_ptiles_mnl("wagp",  st, mnl$fitted.values)
+compare_ptiles_mnl("intp",  st, mnl$fitted.values)
+compare_ptiles_mnl("retp",  st, mnl$fitted.values)
+compare_ptiles_mnl("ssp",   st, mnl$fitted.values)
+
+compare_ptiles_mnl("ssip",  st, mnl$fitted.values)
+compare_ptiles_mnl("pap",   st, mnl$fitted.values)
+
+
+
+
+compare_ecdf_mnl <- function(var_, 
+                             state_select,
+                             mnl_fitted.values,
+                             data = acs_subset,
+                             cutoff = 0.95){
+  # state_select <-  "NY"
+  # var_ <- "pincp"
+  # mnl_fitted.values <- mnl$fitted.values
+  # data              <- acs_subset
+  # cutoff <- 0.99
+
+  if (state_select == "All"){
+  target_state <- as.character(data$stabbr) %>% unique
+  } else target_state <- state_select
+  
+  state_names <- as.character(data$stabbr) %>% unique %>% sort
+    
+  data %<>% 
+    mutate(row_num = row_number())
+  
+  df_mnlShare <- 
+  mnl_fitted.values %>% as_tibble() %>% 
+    mutate(row_num = row_number()) %>% 
+    gather(stabbr, wgt_mnlShare, -row_num) %>% 
+    arrange(stabbr, row_num)
+  
+  data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
+    left_join(mutate(df_wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+    left_join(df_mnlShare, by = c("stabbr", "row_num")) %>% 
+    mutate(# pwgtp = pwgtp * wgt_factor, 
+           pwgtp_rewgt = pwgtp * wgt_mnlShare) # %>% 
+  # filter(stabbr %in% target_state) 
+  # data_stacked
+  
+  data_stacked_select <- data_stacked %>% filter(stabbr %in% target_state)
+  data_select         <- data %>% filter(stabbr %in% target_state)
+
+ 
+  ecdf_org <- Hmisc::wtd.Ecdf(data_stacked_select[[var_]], data_stacked_select$pwgtp)                                      # w/ original weight
+  ecdf_tgt <- Hmisc::wtd.Ecdf(data_select[[var_]],         data_select$pwgtp) # target
+  ecdf_rwt <- Hmisc::wtd.Ecdf(data_stacked_select[[var_]], data_stacked_select$pwgtp_rewgt)
+                             
+  bind_rows(
+   as_tibble(ecdf_org) %>% mutate(type = "org"),
+   as_tibble(ecdf_tgt) %>% mutate(type = paste0("tgt_", state_select)),
+   as_tibble(ecdf_rwt) %>% mutate(type = paste0("rwt_", state_select))
+  ) %>% 
+    mutate(type = factor(type, levels = c("org", paste0("tgt_", state_select), paste0("rwt_", state_select)))) %>% 
+    filter(ecdf <= cutoff) %>% 
+    ggplot(aes(x = x, y = ecdf, color = type)) + theme_bw() + 
+    geom_line() +
+    coord_cartesian(ylim = c(0,1))+
+    scale_color_manual(values = c("grey40", "red", "blue"))+
+    labs(x = NULL,
+         title = paste0("Comparing ECDF \nTarget state: ", state_select, "\nVariable: ", var_))
+}
+
+st <- "TX"
+compare_ecdf_mnl("pincp", st, mnl$fitted.values)
+compare_ecdf_mnl("wagp",  st, mnl$fitted.values)
+compare_ecdf_mnl("intp",  st, mnl$fitted.values)
+compare_ecdf_mnl("retp",  st, mnl$fitted.values)
+compare_ecdf_mnl("ssp",   st, mnl$fitted.values)
+
+
+st <- "NY"
+Var <- "wagp"
+compare_ecdf_mnl(Var, st, mnl_10k$fitted.values, data = acs_subset_10k)
+compare_ecdf_mnl(Var, st, mnl_50k$fitted.values, data = acs_subset_50k)
+
+
+compare_ptiles_mnl(Var, st, mnl_10k$fitted.values, data = acs_subset_10k)
+compare_ptiles_mnl(Var, st, mnl_50k$fitted.values, data = acs_subset_50k)
+
+
+get_mnlMeanShare(mnl_10k$fitted.values, acs_subset_10k)
+get_mnlMeanShare(mnl_50k$fitted.values, acs_subset_50k)
+
+
+
+                # pincp:wagp + 
+                # pincp:intp +
+                # pincp:retp + 
+                # pincp:ssip +
+                # pincp:ssp  + 
+                # pincp:pap  +
+                # pincp:sex  + 
+                # pincp:mar  +
+                # pincp:agep
+
+
+save(mnl_10k, mnl_50k, file = paste0(PROJHOME, "/task2/results/mnl.RData"))
+
+
+```
+
+
+
+
+
+
+
+
+

@@ -70,6 +70,19 @@ glimpse(acs_subset)
 ht(acs_subset)
 summary(acs_subset)
 
+n_sample_10k <- 10e3
+set.seed(1234)
+acs_subset_10k <- persons_all %>% 
+  filter(stabbr %in% states_select, !is.na(pincp), agep >= 18) %>% 
+  sample_n(n_sample_10k) %>% 
+  select(-st) %>% 
+  mutate(otherincp = pincp - (intp + pap + retp + ssip + ssp + wagp),
+         weightp   = pwgtp) # equal to original pwgt, for constructing constraints
+
+saveRDS(acs_subset_10k, paste0(PROJHOME, "/data/acs_subset_10k.rds"))
+
+
+
 # count(samp, stabbr) %>% mutate(share = 100 * n / sum(n))
 # count(persons_all, stabbr) %>% filter(stabbr %in% states_select) %>% mutate(share = 100 * n / sum(n))
 # 
