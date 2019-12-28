@@ -1,0 +1,69 @@
+---
+title: "State TaxData Enhancement Project -- Task 2"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+
+# Start of the program
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/Data/acs/"
+
+#dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
+#dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("task2", "libraries_djb.r"))
+source(here::here("task2", "functions_djb.r"))
+source(here::here("task2", "functions_optimization_djb.r"))
+source(here::here("task2", "functions_ipoptr.R"))
+```
+
+
+# Setting target state and preparing recipe for constraint coefficients
+
+```{r}
+# Loading data
+acs_subset_50k <- readRDS(paste0(PROJHOME, "/data/acs_subset.rds"))
+
+
+ht(acs_subset_50k)
+str(acs_subset_50k)
+
+# Set target state
+target_state <- "All"   # "NY", "CA", "NY", "TX", "IL", "FL"
+
+```
+
+
+
+
+
+
+
+
+
+
+

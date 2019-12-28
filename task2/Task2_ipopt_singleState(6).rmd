@@ -227,7 +227,7 @@ count(ccoef_sparse_test, constraint_sort, constraint_name)
 
 ccoef_lowN_test <- # constraints with low # of non-zero coefficients 
   count(ccoef_sparse_test, constraint_sort, constraint_name) %>% 
-  filter(n <= n_sample / 1000)
+  filter(n <= nrow(acs_subset) / 1000)
 ccoef_lowN_test
 
 ccoef_sparse_test %<>% 
@@ -289,7 +289,7 @@ ccoef_sparse <- recipe %>%
 
 ccoef_lowN <- # constraints with low # of non-zero coefficients 
   count(ccoef_sparse, constraint_sort, constraint_name) %>% 
-  filter(n <= n_sample / 1000)
+  filter(n <= nrow(data_use) / 1000)
 # ccoef_lowN
 
 ccoef_sparse %<>% 
@@ -319,8 +319,10 @@ constraint_vals_allstates <- input_target$ccoef_sparse %>%
   summarise(constraint_val = sum(ccoef / wgt_factor)) # need to use the orginal weight
 # constraint_vals_allstates
 
+
+state_names <- as.character(data$stabbr) %>% unique %>% sort
 constraint_vals_allstates <- 
-  expand.grid(stabbr = states_select, constraint_num = 1:max(ccoef_sparse$constraint_num)) %>% 
+  expand.grid(stabbr = state_names, constraint_num = 1:max(ccoef_sparse$constraint_num)) %>% 
   left_join(constraint_vals_allstates) %>% 
   mutate(constraint_val = ifelse(is.na(constraint_val), 0, constraint_val)) %>% 
   arrange(stabbr, constraint_num)
@@ -452,7 +454,7 @@ result <- ipoptr(x0 = x0,
 }
 
 
-output <- run_ipopt("NY", recipe, "xtop")
+# output <- run_ipopt("NY", recipe, "xtop")
 
 # output$result$message; output$result$status; output$result$iterations
 # output$result$objective
@@ -620,6 +622,24 @@ cor_rwt
 
 
 
+```{r}
+# run all states and save results
+
+outputs_NY <- run_ipopt("NY", recipe, "xtop")
+outputs_CA <- run_ipopt("CA", recipe, "xtop")
+outputs_TX <- run_ipopt("TX", recipe, "xtop")
+outputs_IL <- run_ipopt("IL", recipe, "xtop")
+outputs_FL <- run_ipopt("FL", recipe, "xtop")
+
+
+saveRDS(outputs_NY, file = paste0(PROJHOME, "/task2/results/ipopt_single_NY.rds"))
+saveRDS(outputs_CA, file = paste0(PROJHOME, "/task2/results/ipopt_single_CA.rds"))
+saveRDS(outputs_TX, file = paste0(PROJHOME, "/task2/results/ipopt_single_TX.rds"))
+saveRDS(outputs_IL, file = paste0(PROJHOME, "/task2/results/ipopt_single_IL.rds"))
+saveRDS(outputs_FL, file = paste0(PROJHOME, "/task2/results/ipopt_single_FL.rds"))
+
+
+```
 
 
 

@@ -70,19 +70,6 @@ glimpse(acs_subset)
 ht(acs_subset)
 summary(acs_subset)
 
-n_sample_10k <- 10e3
-set.seed(1234)
-acs_subset_10k <- persons_all %>% 
-  filter(stabbr %in% states_select, !is.na(pincp), agep >= 18) %>% 
-  sample_n(n_sample_10k) %>% 
-  select(-st) %>% 
-  mutate(otherincp = pincp - (intp + pap + retp + ssip + ssp + wagp),
-         weightp   = pwgtp) # equal to original pwgt, for constructing constraints
-
-saveRDS(acs_subset_10k, paste0(PROJHOME, "/data/acs_subset_10k.rds"))
-
-
-
 # count(samp, stabbr) %>% mutate(share = 100 * n / sum(n))
 # count(persons_all, stabbr) %>% filter(stabbr %in% states_select) %>% mutate(share = 100 * n / sum(n))
 # 
@@ -155,6 +142,21 @@ target_state <- "All"   # "NY", "CA", "NY", "TX", "IL", "FL"
 
 # Choose objective function
 obj_fn <- c("xtop", "absapprox")[2]
+
+
+
+# recipe for individual weights
+acs_subset %<>% 
+  mutate(pid = paste0(serialno, sporder))
+
+record_recipe <- tibble(
+  vname    = "weightp",
+  valgroup = paste0("pid==", acs_subset$pid),
+  fn       = "npos" 
+)
+
+# record_recipe %>% nrow
+
 
 
 
@@ -254,7 +256,7 @@ range_recipe
 
 
 # now combine the two sub recipes
-recipe <- bind_rows(totals_recipe, stateTot_recipe, range_recipe) %>% 
+recipe <- bind_rows(totals_recipe, stateTot_recipe, range_recipe, record_recipe) %>% 
 #recipe <- totals_recipe %>% 
   mutate(constraint_sort = row_number(),
          constraint_name = paste(vname, str_remove_all(valgroup, " "), fn, sep="_")) %>%
@@ -268,7 +270,7 @@ recipe
 
 # To solve the optimization problem for 5 states, we need to create
 # a data frame with 5 original df stacked together, each for an indiviudal state. 
-
+# 
 # acs_subset_stacked <- ldply(state_names, function(x) acs_subset %>% mutate(stabbr_original = stabbr, stabbr = x))
 # acs_subset_stacked %>% ht
 # 
@@ -287,13 +289,12 @@ recipe
 # # Note that all state specific constraints on intp are removed due to low # of non-zero coefs. 
 # 
 # ccoef_sparse_test %<>% 
-#   filter(!constraint_name %in% ccoef_lowN_test$constraint_name) %>% 
+#   filter((!constraint_name %in% ccoef_lowN_test$constraint_name) | constraint_sort >= 436) %>% 
 # # ONLY AFTER all filtering is done do we assign constraint numbers, as some
 #   # may drop out if they have no nonzero coefficients %>%
 #   mutate(constraint_num = group_indices(., constraint_sort)) %>%
 #   arrange(constraint_num, row_num) %>% 
 #   select(constraint_num, everything())
-# 
 # count(ccoef_sparse_test, constraint_num, constraint_sort, constraint_name)
 
 # 285 of 375 constraints are kept (76%), most constraints for pincp <= 0 are dropped 
@@ -311,8 +312,8 @@ run_ipopt_allstates <- function(recipe,
 #  - recipe
 #  - obj_fn
 
-data <- acs_subset
-obj_fn <- "xtop"
+# data <- acs_subset
+# obj_fn <- "xtop"
 
 # # names(persons_all)
 # data_use[data_use$ssp >= 0, ] %>% nrow
@@ -358,7 +359,7 @@ ccoef_lowN <- # constraints with low # of non-zero coefficients
 # ccoef_lowN
 
 ccoef_sparse %<>% 
-  filter(!constraint_name %in% ccoef_lowN$constraint_name) %>% 
+  filter((!constraint_name %in% ccoef_lowN$constraint_name) | constraint_sort >= 436) %>% 
 # ONLY AFTER all filtering is done do we assign constraint numbers, as some
   # may drop out if they have no nonzero coefficients %>%
   mutate(constraint_num = group_indices(., constraint_sort)) %>%
@@ -415,7 +416,11 @@ inputs_full$wgt_factor   <- df_wgt_factor
 # create vectors with constraint lower bounds and upper bounds - if they are the same, we have equality constraints
 # create vectors with constraint lower bounds and upper bounds
 # define tolerance - for simplicity, use the same for all, but that is not necessary
-tol <- .01 # 2% range
+
+n_c1 <- length(target_vals) - nrow(data) 
+n_c2 <- nrow(data) 
+
+tol <- c(rep(.01, n_c1), rep(0, n_c2))  # 1% range for non-record-wise constraints
 
 clb <- target_vals
 clb <- clb - tol * abs(clb)
@@ -489,6 +494,7 @@ result <- ipoptr(x0 = x0,
  cat(result$message)
  cat("status:", result$status) 
  cat("iterations: ", result$iterations)
+ cat("objective: ", result$objective)
  cat("Distribution of the solution:","\n")
  print(quantile(result$solution, probs = c(0, .05, .1, .25, .5, .75, .9, .95, 1)))
  
@@ -497,14 +503,14 @@ result <- ipoptr(x0 = x0,
  calcsums <- eval_g_sparse(x=result$solution, inputs_full)
  comparison <- cbind(init_vals, target_vals, calcsums, calcsums/target_vals)
  rownames(comparison) <- ccoef_sparse %>% count(constraint_num, constraint_name) %>% pull(constraint_name)
- # comparison 
+  x <- comparison 
  
- outputs <- list()
- outputs$inputs <- inputs_full
- outputs$result <- result
- outputs$comparison <- comparison
+ output <- list()
+ output$inputs <- inputs_full
+ output$result <- result
+ output$comparison <- comparison
  
- return(outputs)
+ return(output)
  
 }
 
@@ -512,8 +518,12 @@ result <- ipoptr(x0 = x0,
 # output <- run_ipopt("NY", recipe, "xtop")
 
 
-system.time({output <- run_ipopt_allstates(recipe, "xtop")})
-# Takes about 130s 
+# system.time({outputs <- run_ipopt_allstates(recipe, "xtop")})
+# saveRDS(outputs, file = paste0(PROJHOME, "/task2/results/ipopt_allStates.rds"))
+
+outputs <- readRDS(paste0(PROJHOME, "/task2/results/ipopt_allStates.rds"))
+
+# Takes about 1h 
 # Memory usage is  (2.5Gb used by R and RStudio), potential for much larger problems (more states)
 
 # output$result$message; output$result$status; output$result$iterations
@@ -537,7 +547,7 @@ system.time({output <- run_ipopt_allstates(recipe, "xtop")})
 compare_ptiles <- function(var_,
                            state_select,
                            data,
-                           result,
+                           outputs,
                            pts = c(0, .05, .1, .25, .5, .75, .9, .95,.99, 1)
                            ){
 
@@ -553,9 +563,9 @@ if (state_select == "All"){
 
 state_names <- as.character(acs_subset$stabbr) %>% unique %>% sort
 data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
-  left_join(mutate(output$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+  left_join(mutate(outputs$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
   mutate(pwgtp = pwgtp * wgt_factor, 
-         x = result$solution,
+         x = outputs$result$solution,
          pwgtp_rewgt = pwgtp * x) %>% 
   filter(stabbr %in% target_state) 
 
@@ -573,76 +583,76 @@ return(comparison)
 }
 
 
-# Targeted
-compare_ptiles("pincp", "All", acs_subset, output$result)
-compare_ptiles("wagp",  "All", acs_subset, output$result)
-compare_ptiles("intp",  "All", acs_subset, output$result)
-compare_ptiles("retp",  "All", acs_subset, output$result)
-compare_ptiles("ssp",   "All", acs_subset, output$result)
+# Targeted (should be equal to targets by construction)
+compare_ptiles("pincp", "All", acs_subset, outputs)
+compare_ptiles("wagp",  "All", acs_subset, outputs)
+compare_ptiles("intp",  "All", acs_subset, outputs)
+compare_ptiles("retp",  "All", acs_subset, outputs)
+compare_ptiles("ssp",   "All", acs_subset, outputs)
 
 # Not targeted
-compare_ptiles("pap",   "All", acs_subset, output$result)
-compare_ptiles("ssip",  "All", acs_subset, output$result)
-
-
-# Targeted
-compare_ptiles("pincp", "NY", acs_subset, output$result)
-compare_ptiles("wagp",  "NY", acs_subset, output$result)
-compare_ptiles("intp",  "NY", acs_subset, output$result)
-compare_ptiles("retp",  "NY", acs_subset, output$result)
-compare_ptiles("ssp",   "NY", acs_subset, output$result)
-
-# Not targeted
-compare_ptiles("pap",   "NY", acs_subset, output$result)
-compare_ptiles("ssip",  "NY", acs_subset, output$result)
+compare_ptiles("pap",   "All", acs_subset, outputs)
+compare_ptiles("ssip",  "All", acs_subset, outputs)
 
 
 # Targeted
-compare_ptiles("pincp", "CA", acs_subset, output$result)
-compare_ptiles("wagp",  "CA", acs_subset, output$result)
-compare_ptiles("intp",  "CA", acs_subset, output$result)
-compare_ptiles("retp",  "CA", acs_subset, output$result)
-compare_ptiles("ssp",   "CA", acs_subset, output$result)
+compare_ptiles("pincp", "NY", acs_subset, outputs)
+compare_ptiles("wagp",  "NY", acs_subset, outputs)
+compare_ptiles("intp",  "NY", acs_subset, outputs)
+compare_ptiles("retp",  "NY", acs_subset, outputs)
+compare_ptiles("ssp",   "NY", acs_subset, outputs)
 
 # Not targeted
-compare_ptiles("pap",   "CA", acs_subset, output$result)
-compare_ptiles("ssip",  "CA", acs_subset, output$result)
+compare_ptiles("pap",   "NY", acs_subset, outputs)
+compare_ptiles("ssip",  "NY", acs_subset, outputs)
 
 
 # Targeted
-compare_ptiles("pincp", "TX", acs_subset, output$result)
-compare_ptiles("wagp",  "TX", acs_subset, output$result)
-compare_ptiles("intp",  "TX", acs_subset, output$result)
-compare_ptiles("retp",  "TX", acs_subset, output$result)
-compare_ptiles("ssp",   "TX", acs_subset, output$result)
+compare_ptiles("pincp", "CA", acs_subset, outputs)
+compare_ptiles("wagp",  "CA", acs_subset, outputs)
+compare_ptiles("intp",  "CA", acs_subset, outputs)
+compare_ptiles("retp",  "CA", acs_subset, outputs)
+compare_ptiles("ssp",   "CA", acs_subset, outputs)
 
 # Not targeted
-compare_ptiles("pap",   "TX", acs_subset, output$result)
-compare_ptiles("ssip",  "TX", acs_subset, output$result)
+compare_ptiles("pap",   "CA", acs_subset, outputs)
+compare_ptiles("ssip",  "CA", acs_subset, outputs)
 
 
 # Targeted
-compare_ptiles("pincp", "IL", acs_subset, output$result)
-compare_ptiles("wagp",  "IL", acs_subset, output$result)
-compare_ptiles("intp",  "IL", acs_subset, output$result)
-compare_ptiles("retp",  "IL", acs_subset, output$result)
-compare_ptiles("ssp",   "IL", acs_subset, output$result)
+compare_ptiles("pincp", "TX", acs_subset, outputs)
+compare_ptiles("wagp",  "TX", acs_subset, outputs)
+compare_ptiles("intp",  "TX", acs_subset, outputs)
+compare_ptiles("retp",  "TX", acs_subset, outputs)
+compare_ptiles("ssp",   "TX", acs_subset, outputs)
 
 # Not targeted
-compare_ptiles("pap",   "IL", acs_subset, output$result)
-compare_ptiles("ssip",  "IL", acs_subset, output$result)
+compare_ptiles("pap",   "TX", acs_subset, outputs)
+compare_ptiles("ssip",  "TX", acs_subset, outputs)
 
 
 # Targeted
-compare_ptiles("pincp", "FL", acs_subset, output$result)
-compare_ptiles("wagp",  "FL", acs_subset, output$result)
-compare_ptiles("intp",  "FL", acs_subset, output$result)
-compare_ptiles("retp",  "FL", acs_subset, output$result)
-compare_ptiles("ssp",   "FL", acs_subset, output$result)
+compare_ptiles("pincp", "IL", acs_subset, outputs)
+compare_ptiles("wagp",  "IL", acs_subset, outputs)
+compare_ptiles("intp",  "IL", acs_subset, outputs)
+compare_ptiles("retp",  "IL", acs_subset, outputs)
+compare_ptiles("ssp",   "IL", acs_subset, outputs)
 
 # Not targeted
-compare_ptiles("pap",   "FL", acs_subset, output$result)
-compare_ptiles("ssip",  "FL", acs_subset, output$result)
+compare_ptiles("pap",   "IL", acs_subset, outputs)
+compare_ptiles("ssip",  "IL", acs_subset, outputs)
+
+
+# Targeted
+compare_ptiles("pincp", "FL", acs_subset, outputs)
+compare_ptiles("wagp",  "FL", acs_subset, outputs)
+compare_ptiles("intp",  "FL", acs_subset, outputs)
+compare_ptiles("retp",  "FL", acs_subset, outputs)
+compare_ptiles("ssp",   "FL", acs_subset, outputs)
+
+# Not targeted
+compare_ptiles("pap",   "FL", acs_subset, outputs)
+compare_ptiles("ssip",  "FL", acs_subset, outputs)
 
 
 
@@ -657,7 +667,7 @@ compare_ptiles("ssip",  "FL", acs_subset, output$result)
 compare_ecdf <- function(var_,
                          state_select,
                          data,
-                         result,
+                         outputs,
                          cutoff = 0.95){
 
 
@@ -673,9 +683,9 @@ if (state_select == "All"){
 
 state_names <- as.character(acs_subset$stabbr) %>% unique %>% sort
 data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
-  left_join(mutate(output$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+  left_join(mutate(outputs$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
   mutate(pwgtp = pwgtp * wgt_factor, 
-         x = result$solution,
+         x = outputs$result$solution,
          pwgtp_rewgt = pwgtp * x) %>% 
   filter(stabbr %in% target_state) 
 
@@ -703,42 +713,41 @@ bind_rows(
  
 }
 
+compare_ecdf("pincp", "All", acs_subset, outputs)
+compare_ecdf("wagp",  "All", acs_subset, outputs)
+compare_ecdf("intp",  "All", acs_subset, outputs)
+compare_ecdf("retp",  "All", acs_subset, outputs)
+compare_ecdf("ssp",   "All", acs_subset, outputs)
 
-compare_ecdf("pincp", "All", acs_subset, output$result)
-compare_ecdf("wagp",  "All", acs_subset, output$result)
-compare_ecdf("intp",  "All", acs_subset, output$result)
-compare_ecdf("retp",  "All", acs_subset, output$result)
-compare_ecdf("ssp",   "All", acs_subset, output$result)
+compare_ecdf("pincp", "NY", acs_subset, outputs)
+compare_ecdf("wagp",  "NY", acs_subset, outputs)
+compare_ecdf("intp",  "NY", acs_subset, outputs, 1)
+compare_ecdf("retp",  "NY", acs_subset, outputs)
+compare_ecdf("ssp",   "NY", acs_subset, outputs)
 
-compare_ecdf("pincp", "NY", acs_subset, output$result)
-compare_ecdf("wagp",  "NY", acs_subset, output$result)
-compare_ecdf("intp",  "NY", acs_subset, output$result)
-compare_ecdf("retp",  "NY", acs_subset, output$result)
-compare_ecdf("ssp",   "NY", acs_subset, output$result)
+compare_ecdf("pincp", "CA", acs_subset, outputs)
+compare_ecdf("wagp",  "CA", acs_subset, outputs)
+compare_ecdf("intp",  "CA", acs_subset, outputs)
+compare_ecdf("retp",  "CA", acs_subset, outputs)
+compare_ecdf("ssp",   "CA", acs_subset, outputs)
 
-compare_ecdf("pincp", "CA", acs_subset, output$result)
-compare_ecdf("wagp",  "CA", acs_subset, output$result)
-compare_ecdf("intp",  "CA", acs_subset, output$result)
-compare_ecdf("retp",  "CA", acs_subset, output$result)
-compare_ecdf("ssp",   "CA", acs_subset, output$result)
+compare_ecdf("pincp", "TX", acs_subset, outputs)
+compare_ecdf("wagp",  "TX", acs_subset, outputs)
+compare_ecdf("intp",  "TX", acs_subset, outputs)
+compare_ecdf("retp",  "TX", acs_subset, outputs)
+compare_ecdf("ssp",   "TX", acs_subset, outputs)
 
-compare_ecdf("pincp", "TX", acs_subset, output$result)
-compare_ecdf("wagp",  "TX", acs_subset, output$result)
-compare_ecdf("intp",  "TX", acs_subset, output$result)
-compare_ecdf("retp",  "TX", acs_subset, output$result)
-compare_ecdf("ssp",   "TX", acs_subset, output$result)
+compare_ecdf("pincp", "IL", acs_subset, outputs)
+compare_ecdf("wagp",  "IL", acs_subset, outputs)
+compare_ecdf("intp",  "IL", acs_subset, outputs)
+compare_ecdf("retp",  "IL", acs_subset, outputs)
+compare_ecdf("ssp",   "IL", acs_subset, outputs)
 
-compare_ecdf("pincp", "IL", acs_subset, output$result)
-compare_ecdf("wagp",  "IL", acs_subset, output$result)
-compare_ecdf("intp",  "IL", acs_subset, output$result)
-compare_ecdf("retp",  "IL", acs_subset, output$result)
-compare_ecdf("ssp",   "IL", acs_subset, output$result)
-
-compare_ecdf("pincp", "FL", acs_subset, output$result)
-compare_ecdf("wagp",  "FL", acs_subset, output$result)
-compare_ecdf("intp",  "FL", acs_subset, output$result)
-compare_ecdf("retp",  "FL", acs_subset, output$result)
-compare_ecdf("ssp",   "FL", acs_subset, output$result)
+compare_ecdf("pincp", "FL", acs_subset, outputs)
+compare_ecdf("wagp",  "FL", acs_subset, outputs)
+compare_ecdf("intp",  "FL", acs_subset, outputs)
+compare_ecdf("retp",  "FL", acs_subset, outputs)
+compare_ecdf("ssp",   "FL", acs_subset, outputs)
 
 
 # Note
@@ -753,7 +762,7 @@ compare_ecdf("ssp",   "FL", acs_subset, output$result)
 compare_corr <- function(var_,
                          state_select,
                          data,
-                         result){
+                         outputs){
 
 var_ <- "pincp"
 data <-  acs_subset
@@ -766,9 +775,9 @@ if (state_select == "All"){
 
 state_names <- as.character(acs_subset$stabbr) %>% unique %>% sort
 data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
-  left_join(mutate(output$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+  left_join(mutate(outputs$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
   mutate(pwgtp = pwgtp * wgt_factor, 
-         x = result$solution,
+         x = outputs$result$solution,
          pwgtp_rewgt = pwgtp * x) %>% 
   filter(stabbr %in% target_state) 
 
@@ -784,38 +793,48 @@ list(org = cor_org,
      rwt = cor_rwt)
 }
 
-compare_corr("pincp", "All", acs_subset, output$result)
+compare_corr("pincp", "All", acs_subset, outputs)
 
-compare_corr("pincp", "NY", acs_subset, output$result)
-compare_corr("pincp", "CA", acs_subset, output$result)
-compare_corr("pincp", "TX", acs_subset, output$result)
-compare_corr("pincp", "IL", acs_subset, output$result)
-compare_corr("pincp", "FL", acs_subset, output$result)
+compare_corr("pincp", "NY", acs_subset, outputs)
+compare_corr("pincp", "CA", acs_subset, outputs)
+compare_corr("pincp", "TX", acs_subset, outputs)
+compare_corr("pincp", "IL", acs_subset, outputs)
+compare_corr("pincp", "FL", acs_subset, outputs)
 
 # Improvement for correlation between pincp and other vars. 
 # Correlation between other vars are quite low. 
 
 
 
+
+
+data <- acs_subset
+
 data_stacked <- ldply(state_names, function(x) data %>% mutate(stabbr_original = stabbr, stabbr = x)) %>% 
-  left_join(mutate(output$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
+  left_join(mutate(outputs$inputs$wgt_factor, stabbr = as.character(stabbr)), by = "stabbr") %>% 
   mutate(pwgtp = pwgtp * wgt_factor, 
-         x = result$solution,
-         pwgtp_rewgt = pwgtp * x) %>% 
-  filter(stabbr %in% target_state) 
+         x = outputs$result$solution,
+         pwgtp_rewgt = pwgtp * x) 
+data_stacked
 
-df <- data_stacked %>% filter(serialno == 2015000271836)
+# df <- data_stacked %>% select(serialno, sporder, stabbr, pwgtp_rewgt, weightp) %>%
+#   spread(stabbr, pwgtp_rewgt) %>% 
+#   mutate(tot = CA + FL+ IL + NY + TX,
+#          diff = (weightp - tot)/weightp )
+#   
+# df$diff %>% quantile(c(0, 0.01, 0.05, 0.25, .5, .75, .90, .99, 1))
 
-df$pwgtp %>% sum
-df$pwgtp_rewgt %>% sum
 
-
-df <- data_stacked %>% select(serialno, sporder, stabbr, pwgtp_rewgt, weightp) %>%
-  spread(stabbr, pwgtp_rewgt) %>% 
-  mutate(tot = CA + FL+ IL + NY + TX,
-         diff = (weightp - tot)/weightp )
-  
-df$diff %>% quantile(c(0, 0.01, 0.05, 0.25, .5, .75, .90, .99, 1))
+state_names <- as.character(data$stabbr) %>% unique %>% sort
+data_stacked %>% select(serialno, sporder, stabbr, stabbr_original, x) %>% 
+  #filter(stabbr == "CA") %>% 
+  spread(stabbr_original, x) %>% 
+  arrange(stabbr) %>% 
+  group_by(stabbr) %>% 
+  summarise_at(vars(!!state_names), .funs = list(mean =  ~mean(., na.rm = TRUE),
+                                                 med  =  ~median(., na.rm = TRUE)
+                                                 )
+               )
 
 
 

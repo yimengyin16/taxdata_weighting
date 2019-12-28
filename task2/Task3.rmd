@@ -1,0 +1,67 @@
+---
+title: "State TaxData Enhancement Project -- Task 2"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+
+# Start of the program
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/state_puf_shared/yy/"
+
+#dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
+#dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("task2", "libraries_djb.r"))
+source(here::here("task2", "functions_djb.r"))
+source(here::here("task2", "functions_optimization_djb.r"))
+source(here::here("task2", "functions_ipoptr.R"))
+```
+
+
+# Constructing a subset of ACS data
+
+```{r}
+
+puf2017_weighted <- readRDS(paste0(destdir, "puf2017_weighted.rds"))
+state_ratio_adjusted_weights_2017 <- readRDS(paste0(destdir, "state_ratio_adjusted_weights_2017.rds"))
+hist2_targets2017 <- readRDS(paste0(destdir, "hist2_targets2017.rds"))
+
+puf2017_weighted %>% ht
+state_ratio_adjusted_weights_2017 %>% ht
+hist2_targets2017 %>% ht
+
+
+glimpse(hist2_targets2017)
+glimpse(puf2017_weighted)
+glimpse(state_ratio_adjusted_weights_2017)
+
+
+```
+
+
+
+

@@ -1,0 +1,147 @@
+---
+title: "State TaxData Enhancement Project -- Task 2"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+
+# Start of the program
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/Data/acs/"
+
+#dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
+#dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("task2", "libraries_djb.r"))
+source(here::here("task2", "functions_djb.r"))
+source(here::here("task2", "functions_optimization_djb.r"))
+source(here::here("task2", "functions_ipoptr.R"))
+```
+
+
+# Constructing a subset of ACS data
+
+```{r}
+
+persons_all <- readRDS(paste0(destdir, "persons.rds"))
+glimpse(persons_all)
+ns(persons_all)
+
+states_select <- c("CA", "NY", "TX", "IL", "FL") # 5 large very different states
+n_sample      <- 50e3
+set.seed(1234)
+
+acs_subset <- persons_all %>% 
+  filter(stabbr %in% states_select, !is.na(pincp), agep >= 18) %>% 
+  sample_n(n_sample) %>% 
+  select(-st) %>% 
+  mutate(otherincp = pincp - (intp + pap + retp + ssip + ssp + wagp),
+         weightp   = pwgtp) # equal to original pwgt, for constructing constraints
+
+glimpse(acs_subset)
+
+
+saveRDS(acs_subset, paste0(PROJHOME, "/data/acs_subset.rds"))
+
+glimpse(acs_subset)
+ht(acs_subset)
+summary(acs_subset)
+
+n_sample_10k <- 10e3
+set.seed(1234)
+acs_subset_10k <- persons_all %>% 
+  filter(stabbr %in% states_select, !is.na(pincp), agep >= 18) %>% 
+  sample_n(n_sample_10k) %>% 
+  select(-st) %>% 
+  mutate(otherincp = pincp - (intp + pap + retp + ssip + ssp + wagp),
+         weightp   = pwgtp) # equal to original pwgt, for constructing constraints
+
+saveRDS(acs_subset_10k, paste0(PROJHOME, "/data/acs_subset_10k.rds"))
+
+
+
+# count(samp, stabbr) %>% mutate(share = 100 * n / sum(n))
+# count(persons_all, stabbr) %>% filter(stabbr %in% states_select) %>% mutate(share = 100 * n / sum(n))
+# 
+# count(samp, sex) %>% mutate(share = 100 * n / sum(n))
+# persons_all %>% filter(stabbr %in% states_select) %>% count(sex) %>% mutate(share = 100 * n / sum(n))
+# 
+# quantile(samp$agep)
+# quantile(persons_all %>% filter(stabbr %in% states_select, agep>=18) %>% pull(agep))
+# 
+# quantile(samp$pincp)
+# quantile(persons_all %>% filter(stabbr %in% states_select, agep>=18) %>% pull(pincp))
+# quantile(persons_all %>% filter(agep>=18) %>% pull(pincp))
+# 
+
+
+## Key variable 
+
+# serialno: family ID
+# sporder : family member ID
+# stabbr  : state abbreviation
+# pwgtp   : person weight, an integer NOTE: do not need to be divided by 100 as in the case of PUF
+# sex
+# agep    : age
+# mar
+# intp    : interest income 
+# pap     : public assistance income
+# pincp   : total person income
+# retp    : retirement income
+# ssip    : Supplemental Security Income
+# ssp     : Social Security income
+# wagp    : Wages
+
+#------------------------------------------
+
+
+### Original instruction
+# # keep a few variables:
+# # RECID unique id
+# # E00100 AGI
+# # E00200 wages
+# # E00300 interest received -- not kept
+# # E01700 pension income in AGI
+# # E02000 schedule E net income 
+# # S006 record weight as an integer - must be divided by 100
+# vars <- c("RECID", "E00100", "E00200", "E01700", "E02000", "S006")
+# set.seed(1234)
+# pufsub <- pufraw %>% 
+#   sample_n(5000) %>%
+#   select(vars) %>%
+#   mutate(weight=S006 / 100, otheragi=E00100 - E00200 - E01700 - E02000) %>%
+#   select(-S006) %>%
+#   select(RECID, weight, everything())
+# 
+# # glimpse(pufsub)
+# # ht(pufsub)
+
+```
+
+
+
+
+
