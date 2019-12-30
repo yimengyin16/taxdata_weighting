@@ -24,16 +24,6 @@ knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
 ```
 
 
-```{r system_specific_info, include=TRUE}
-# change information here as needed
-destdir <- "C:/Dropbox/AA_Projects_Work/Proj_taxData/Data/acs/"
-
-#dbdir <- paste0(destdir, "rsqlite/") # location for sqlite database to be created
-#dbf <- paste0(dbdir, "acs.sqlite") # database name; database will be created (if not already created) and used below
-
-```
-
-
 ```{r includes, include=FALSE}
 source(here::here("task2", "libraries_djb.r"))
 source(here::here("task2", "functions_djb.r"))
@@ -42,18 +32,317 @@ source(here::here("task2", "functions_ipoptr.R"))
 ```
 
 
-# Setting target state and preparing recipe for constraint coefficients
+# Loading all results 
 
 ```{r}
-# Loading data
-acs_subset_50k <- readRDS(paste0(PROJHOME, "/data/acs_subset.rds"))
+
+acs_subset <- readRDS(paste0(PROJHOME, "/data/acs_subset.rds"))
+
+outputs_ipopt_noWC <- readRDS(paste0(PROJHOME, "/task2/results/ipopt_allStates_noWC.rds"))
+outputs_ipopt_WC <- readRDS(paste0(PROJHOME, "/task2/results/ipopt_allStates_WC.rds"))
+outputs_mnl <- readRDS(paste0(PROJHOME, "/task2/results/mnl_50k.rds"))
+
+```
+
+```{r}
+
+# Constructing data frame containing all results
 
 
-ht(acs_subset_50k)
-str(acs_subset_50k)
+state_names  <- as.character(acs_subset$stabbr) %>% unique %>% sort
 
-# Set target state
-target_state <- "All"   # "NY", "CA", "NY", "TX", "IL", "FL"
+df_wgt_factor <- 
+  acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(pwgtp_stateSum = sum(pwgtp)) %>% 
+  mutate(wgt_factor = pwgtp_stateSum / sum(pwgtp_stateSum),
+         stabbr = as.character(stabbr))
+
+
+df_mnlShare <- 
+  outputs_mnl$mnl$fitted.values %>% as_tibble() %>% 
+    mutate(row_num = row_number()) %>% 
+    gather(stabbr, wgt_mnlShare, -row_num) %>% 
+    arrange(stabbr, row_num)
+# df_mnlShare
+
+
+data_stacked <- ldply(state_names, function(x) acs_subset %>% mutate(stabbr_original = stabbr, stabbr = x, row_num = row_number())) %>% 
+  left_join(df_wgt_factor , by = "stabbr") %>% 
+  left_join(df_mnlShare, by = c("row_num", "stabbr")) %>% 
+  mutate(x_noWC = outputs_ipopt_noWC$result$solution,
+         x_WC   = outputs_ipopt_WC$result$solution) %>% 
+  mutate(pwgtp_scaleDown = pwgtp * wgt_factor,
+         rwt_noWC = pwgtp_scaleDown * x_noWC,
+         rwt_WC   = pwgtp_scaleDown * x_WC,
+         rwt_mnl  = pwgtp * wgt_mnlShare) %>% 
+  select(serialno, sporder, row_num, stabbr, stabbr_original, pwgtp, rwt_noWC, rwt_WC, rwt_mnl, pwgtp_scaleDown, everything()) %>% 
+  ungroup()
+
+```
+
+
+```{r}
+
+# How much share is from each state?
+
+wgt_shares <- 
+data_stacked %>% 
+  group_by(stabbr, stabbr_original) %>% 
+  summarise(wgt_sum_org  = sum(pwgtp_scaleDown),
+            wgt_sum_noWC = sum(rwt_noWC),
+            wgt_sum_WC   = sum(rwt_WC),
+            wgt_sum_mnl  = sum(rwt_mnl)
+            ) %>% 
+  group_by(stabbr) %>% 
+  mutate(wgt_share_org  = wgt_sum_org / sum(wgt_sum_org),
+         wgt_share_noWC = wgt_sum_noWC/ sum(wgt_sum_noWC),
+         wgt_share_WC   = wgt_sum_WC / sum(wgt_sum_WC),
+         wgt_share_mnl  = wgt_sum_mnl / sum(wgt_sum_mnl))
+  
+
+wgt_shares %>% filter(stabbr == "CA")
+wgt_shares %>% filter(stabbr == "NY")
+wgt_shares %>% filter(stabbr == "TX")
+wgt_shares %>% filter(stabbr == "IL")
+wgt_shares %>% filter(stabbr == "FL")
+
+
+# When constructing the fake state file, all reweighting approaches allocate more weights 
+#  to records (persons) that are from the target state. The mnl approach allocates more weights to
+#  the target state compared to the two optimization-based approaches. 
+
+```
+
+```{r}
+# Compare overall distribution：ecdf
+
+
+
+
+```
+
+
+```{r}
+
+# Marginal distribution 2: Compare percentiles
+
+
+compare_ptile <- function(st, Var, pos = FALSE,  data = data_stacked){
+
+# st  <- "FL"
+# Var <- "pincp" 
+
+inc_vars <- c("pincp", "wagp", "intp", "retp", "ssp", "ssip", "pap")
+state_names  <- as.character(data_stacked$stabbr) %>% unique %>% sort
+
+data %<>% rename(var_sel = !!Var)
+if(pos) data %<>% filter(var_sel > 0)
+
+
+df_ptile_rwt <- 
+data %>% 
+  filter(stabbr == st) %>% 
+  select(stabbr, row_num, var_sel, pwgtp_scaleDown, rwt_noWC, rwt_WC, rwt_mnl) %>% 
+  # rename(var_sel = !!Var) %>% 
+  gather(method, wght, -stabbr, -row_num,  -var_sel) %>% 
+  mutate(method = factor(method, levels = c("pwgtp_scaleDown", "rwt_noWC", "rwt_WC", "rwt_mnl"))) %>% 
+  group_by(method) %>% 
+  summarise(p01 = Hmisc::wtd.quantile(var_sel, wght, 0.01),
+            p05 = Hmisc::wtd.quantile(var_sel, wght, 0.05),
+            p10 = Hmisc::wtd.quantile(var_sel, wght, 0.10),
+            p25 = Hmisc::wtd.quantile(var_sel, wght, 0.25),
+            p50 = Hmisc::wtd.quantile(var_sel, wght, 0.50),
+            p75 = Hmisc::wtd.quantile(var_sel, wght, 0.75),
+            p90 = Hmisc::wtd.quantile(var_sel, wght, 0.90),
+            p95 = Hmisc::wtd.quantile(var_sel, wght, 0.95),
+            p99 = Hmisc::wtd.quantile(var_sel, wght, 0.99)) %>% 
+  gather(percentile, value, -method) %>% 
+  spread(method, value)
+df_ptile_rwt
+
+df_ptile_org <-   
+data %>% 
+  filter(stabbr == state_names[1], stabbr_original == st) %>% 
+  # rename(var_sel = !!Var) %>% 
+  summarise(p01 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.01),
+            p05 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.05),
+            p10 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.10),
+            p25 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.25),
+            p50 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.50),
+            p75 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.75),
+            p90 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.90),
+            p95 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.95),
+            p99 = Hmisc::wtd.quantile(var_sel, pwgtp, 0.99))
+
+df_ptile_rwt %>% 
+  mutate(pwgtp_tgt =  as.matrix(df_ptile_org) %>% as.vector(),
+         state = st,
+         variable = Var) %>% 
+  select(state, variable, percentile, 
+         original = pwgtp_scaleDown, 
+         target   = pwgtp_tgt,
+         rwt_noWC,
+         rwt_WC,
+         rwt_mnl) %>% 
+  mutate(diff_org  = 100*(original - target) / target,
+         diff_noWC = 100*(rwt_noWC - target) / target,
+         diff_WC   = 100*(rwt_WC   - target) / target,
+         diff_mnl  = 100*(rwt_mnl  - target) / target) 
+}         
+
+compare_npos <- function(Var, data=data_stacked){
+  
+
+# Var <- "pap"
+# data <- data_stacked
+
+state_names  <- as.character(data_stacked$stabbr) %>% unique %>% sort
+data %<>% rename(var_sel = !!Var)
+data_stacked
+
+df1 <- 
+data %>% 
+  select(stabbr, pwgtp_scaleDown, rwt_noWC,rwt_WC, rwt_mnl, var_sel) %>% 
+  gather(method, wght, -stabbr, -var_sel) %>% 
+  mutate(method = factor(method, levels = c("pwgtp_scaleDown", "rwt_noWC", "rwt_WC", "rwt_mnl"))) %>% 
+  group_by(stabbr, method) %>% 
+  summarise(wgt_pos = sum(wght[var_sel > 0]),
+            wgt_tot = sum(wght)) %>% 
+  mutate(share_pos = wgt_pos / wgt_tot)
+
+df2 <- 
+data %>% 
+  filter(stabbr == state_names[1]) %>% 
+  select(stabbr = stabbr_original, pwgtp, var_sel) %>% 
+  group_by(stabbr) %>% 
+  summarise(wgt_pos = sum(pwgtp[var_sel > 0]),
+            wgt_tot = sum(pwgtp)) %>% 
+  mutate(share_pos = wgt_pos / wgt_tot,
+         method = "tgt") 
+
+
+bind_rows(df1, df2) %>% 
+  mutate(method = factor(method, levels = c("pwgtp_scaleDown","tgt", "rwt_noWC", "rwt_WC", "rwt_mnl"))) %>% 
+  arrange(stabbr, method) %>% 
+  mutate(diff_wgt = 100*(wgt_pos / wgt_pos[method == "tgt"]) - 100,
+         diff_share = share_pos - share_pos[method == "tgt"]) %>% 
+  mutate(variable = Var) %>% 
+  select(variable, everything())
+
+}
+
+
+
+compare_npos("intp")
+compare_npos("wagp")
+compare_npos("retp")
+compare_npos("ssp")
+# very close, ipopt approaches are marginally better than mnl
+
+compare_npos("ssip") # mnl outperforms ipopt approaches
+compare_npos("pap")  # mnl outperforms ipopt approaches
+
+
+compare_ptile("NY", "pincp", T)
+compare_ptile("CA", "pincp", T)
+compare_ptile("TX", "pincp", T)
+compare_ptile("FL", "pincp", T)
+compare_ptile("IL", "pincp", T)
+
+compare_ptile("NY", "wagp", T)
+compare_ptile("CA", "wagp", T)
+compare_ptile("TX", "wagp", T)
+compare_ptile("FL", "wagp", T)
+compare_ptile("IL", "wagp", T)
+
+compare_ptile("NY", "intp", T)
+compare_ptile("CA", "intp", T)
+compare_ptile("TX", "intp", T)
+compare_ptile("FL", "intp", T) # outcome is worse than other states
+compare_ptile("IL", "intp", T)
+
+compare_ptile("NY", "retp", T)
+compare_ptile("CA", "retp", T)
+compare_ptile("TX", "retp", T)
+compare_ptile("FL", "retp", T)
+compare_ptile("IL", "retp", T)
+# mnl worse than ipopt except in FL (and IL, to lesser extent)
+
+
+compare_ptile("NY", "ssp", T)
+compare_ptile("CA", "ssp", T)
+compare_ptile("TX", "ssp", T)
+compare_ptile("FL", "ssp", T)
+compare_ptile("IL", "ssp", T)
+# the performance of mnl is comparable, if not better than the ipopt approaches
+
+
+compare_ptile("NY", "ssip", T)
+compare_ptile("CA", "ssip", T)
+compare_ptile("TX", "ssip", T)
+compare_ptile("FL", "ssip", T)
+compare_ptile("IL", "ssip", T)
+# the performance of mnl is comparable to the ipopt approaches
+
+
+compare_ptile("NY", "pap", T)
+compare_ptile("CA", "pap", T)
+compare_ptile("TX", "pap", T)
+compare_ptile("FL", "pap", T)
+compare_ptile("IL", "pap", T)
+# the mnl approach outperforms the ipopt approaches except in IL. 
+
+
+
+# The mnl approach allocate more weights to records from the the target state, compared with the two ipopt approach. 
+# Thus, the mnl approach may produce better results for non-targeted variables with highly state-dependent patterns. 
+# (eg: ssip vs pap, CA and NY have much higher percentage of pos pap and average pap than FL and TX. ) 
+
+
+
+
+
+```
+
+
+
+```{r}
+# Compare correlatoin across variables. 
+
+data <- data_stacked
+
+st <- "FL"
+
+df_all <- data %>% filter(stabbr == st)
+df_tgt <- data %>% filter(stabbr == st, stabbr_original == st)
+
+cor_org  <- weights::wtd.cors(select(df_all, pincp, wagp, intp, retp, ssp, ssip, pap) %>% as.matrix, weight = df_all$pwgtp_scaleDown)
+cor_tgt  <- weights::wtd.cors(select(df_tgt, pincp, wagp, intp, retp, ssp, ssip, pap) %>% as.matrix, weight = df_tgt$pwgtp)
+cor_noWC <- weights::wtd.cors(select(df_all, pincp, wagp, intp, retp, ssp, ssip, pap) %>% as.matrix, weight = df_all$rwt_noWC)
+cor_WC   <- weights::wtd.cors(select(df_all, pincp, wagp, intp, retp, ssp, ssip, pap) %>% as.matrix, weight = df_all$rwt_WC)
+cor_mnl  <- weights::wtd.cors(select(df_all, pincp, wagp, intp, retp, ssp, ssip, pap) %>% as.matrix, weight = df_all$rwt_mnl)
+
+
+# cor_org
+# cor_tgt
+# cor_noWC
+# cor_WC
+# cor_mnl
+
+Col <- 1
+
+bind_cols(list(
+org   = cor_org[,Col],
+tgt   = cor_tgt[,Col],
+no_WC = cor_noWC[,Col],
+WC    = cor_WC[,Col],
+mnl   = cor_mnl[,Col])
+)
+
+# very simiar in maintainting the correlation between variables. 
+
+  
 
 ```
 
@@ -61,6 +350,220 @@ target_state <- "All"   # "NY", "CA", "NY", "TX", "IL", "FL"
 
 
 
+
+
+```{r}
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_pap = sum(pwgtp[pap > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(pap_share = n_pap / n)
+
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_pap = sum(pwgtp[pincp> 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(pap_share = n_pap / n)
+
+
+## Examine interest income
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_neg   = sum(pwgtp[intp < 0]),
+            n_zero  = sum(pwgtp[intp == 0]),
+            n_pos   = sum(pwgtp[intp > 0]),
+            tot_neg = sum((pwgtp*intp)[intp < 0]),
+            tot_pos = sum((pwgtp*intp)[intp > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_neg = n_neg / n,
+         share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_neg   = tot_neg / n_neg,
+         avg_pos   = tot_pos / n_pos
+         )
+  # less than 1% have negative interest income
+
+
+data_stacked %>% 
+  group_by(stabbr) %>% 
+  mutate(pwgtp = rwt_mnl) %>% 
+  summarise(n_neg   = sum(pwgtp[intp < 0]),
+            n_zero  = sum(pwgtp[intp == 0]),
+            n_pos   = sum(pwgtp[intp > 0]),
+            tot_neg = sum((pwgtp*intp)[intp < 0]),
+            tot_pos = sum((pwgtp*intp)[intp > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_neg = n_neg / n,
+         share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_neg   = tot_neg / n_neg,
+         avg_pos   = tot_pos / n_pos
+         )
+
+
+
+
+
+# analysis of pap
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_zero  = sum(pwgtp[pap == 0]),
+            n_pos   = sum(pwgtp[pap > 0]),
+            tot_pos = sum((pwgtp*pap)[pap > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         )
+
+
+# analysis of ssip
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_zero  = sum(pwgtp[ssip == 0]),
+            n_pos   = sum(pwgtp[ssip > 0]),
+            tot_pos = sum((pwgtp*ssip)[ssip > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         )
+
+
+# analysis of ssp
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_neg  = sum(pwgtp[ssp < 0]),
+            n_zero  = sum(pwgtp[ssp == 0]),
+            n_pos   = sum(pwgtp[ssp > 0]),
+            tot_pos = sum((pwgtp*ssp)[ssp > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         )
+
+# analysis of wagp
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_neg  = sum(pwgtp[wagp < 0]),
+            n_zero  = sum(pwgtp[wagp == 0]),
+            n_pos   = sum(pwgtp[wagp > 0]),
+            tot_pos = sum((pwgtp*wagp)[wagp > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         )
+
+# analysis of retp
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_neg   = sum(pwgtp[retp < 0]),
+            n_zero  = sum(pwgtp[retp == 0]),
+            n_pos   = sum(pwgtp[retp > 0]),
+            tot_pos = sum((pwgtp*retp)[retp > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         )
+```
+
+
+
+```{r}
+# Conclusion
+
+# Targeted variable, Comparing the distribution of the 3 method, using NY as an example
+tab_CA_pincp <- compare_ptile("CA", "pincp", F)
+tab_CA_pincp
+# Not targeted variable
+
+
+df_tgt <- 
+acs_subset %>% 
+  group_by(stabbr) %>% 
+  summarise(n_zero  = sum(pwgtp[pap == 0]),
+            n_pos   = sum(pwgtp[pap > 0]),
+            tot_pos = sum((pwgtp*pap)[pap > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         ) %>% 
+  select(stabbr, share_tgt = share_pos, avg_tgt = avg_pos)
+
+df_WC <- 
+data_stacked %>% 
+  group_by(stabbr) %>% 
+  mutate(pwgtp = rwt_WC) %>% 
+  summarise(n_zero  = sum(pwgtp[pap == 0]),
+            n_pos   = sum(pwgtp[pap > 0]),
+            tot_pos = sum((pwgtp*pap)[pap > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         ) %>% 
+  select(stabbr, share_WC = share_pos, avg_WC = avg_pos)
+  
+df_noWC <- 
+data_stacked %>% 
+  group_by(stabbr) %>% 
+  mutate(pwgtp = rwt_noWC) %>% 
+  summarise(n_zero  = sum(pwgtp[pap == 0]),
+            n_pos   = sum(pwgtp[pap > 0]),
+            tot_pos = sum((pwgtp*pap)[pap > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         ) %>% 
+  select(stabbr, share_noWC = share_pos, avg_noWC = avg_pos)
+  
+df_mnl <- 
+data_stacked %>% 
+  group_by(stabbr) %>% 
+  mutate(pwgtp = rwt_mnl) %>% 
+  summarise(n_zero  = sum(pwgtp[pap == 0]),
+            n_pos   = sum(pwgtp[pap > 0]),
+            tot_pos = sum((pwgtp*pap)[pap > 0]),
+            n    = sum(pwgtp)) %>% 
+  mutate(share_zero = n_zero / n,
+         share_pos = n_pos / n,
+         avg_pos   = tot_pos / n_pos
+         ) %>% 
+  select(stabbr, share_mnl = share_pos, avg_mnl = avg_pos)
+  
+
+tab_pap <- 
+df_tgt %>% 
+  left_join(df_WC) %>% 
+  left_join(df_noWC) %>% 
+  left_join(df_mnl) %>% 
+  select(stabbr, 
+         share_tgt,
+         share_noWC,
+         share_WC,
+         share_mnl, 
+         avg_tgt,
+         avg_noWC,
+         avg_WC,
+         avg_mnl)
+
+
+
+
+tab_NY_pincp 
+tab_pap
+
+
+
+write.xlsx2(tab_CA_pincp, paste0(PROJHOME, "/task2/results/tab_CA_pincp.xlsx"))
+write.xlsx2(tab_pap, paste0(PROJHOME, "/task2/results/pap.xlsx"))
+
+
+```
 
 
 
