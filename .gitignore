@@ -3,5 +3,10 @@
 .RData
 .Ruserdata
 data/
+task2/results/**/*.rds
+task3/input_files
+task3/interim_results/*.*
+task3/output_files/*.*
+task3/logfiles/*.*
 temp/
 *.xls*
